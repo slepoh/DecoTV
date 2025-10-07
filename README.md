@@ -80,7 +80,6 @@
 - [📄 License](#-license)
 - [🙏 致谢](#-致谢)
 - [📈 Star History](#-star-history)
-- [💝 赞赏支持](#-赞赏支持)
 
 ## 🛠 技术栈
 
@@ -102,7 +101,7 @@
 ```yml
 services:
   decotv-core:
-    image: ghcr.io/decohererk/decotv:latest
+    image: ghcr.io/slepoh/decotv:latest
     container_name: decotv-core
     restart: on-failure
     ports:
@@ -136,7 +135,7 @@ volumes:
 ```yml
 services:
   decotv-core:
-    image: ghcr.io/decohererk/decotv:latest
+    image: ghcr.io/slepoh/decotv:latest
     container_name: decotv-core
     restart: on-failure
     ports:
@@ -173,7 +172,7 @@ networks:
 ```yml
 services:
   decotv-core:
-    image: ghcr.io/decohererk/decotv:latest
+    image: ghcr.io/slepoh/decotv:latest
     container_name: decotv-core
     restart: on-failure
     ports:
@@ -296,7 +295,7 @@ NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 选项解释：
 
 ## 🎥 TVbox 配置
 
-具体可见 [TVBox 配置优化说明](https://github.com/Decohererk/DecoTV/blob/main/TVBox%E9%85%8D%E7%BD%AE%E4%BC%98%E5%8C%96%E8%AF%B4%E6%98%8E.md) ,详细功能见/admin 管理页面 **TVbox 配置**
+具体可见 [TVBox 配置优化说明](https://github.com/slepoh/DecoTV/blob/main/TVBox%E9%85%8D%E7%BD%AE%E4%BC%98%E5%8C%96%E8%AF%B4%E6%98%8E.md) ,详细功能见/admin 管理页面 **TVbox 配置**
 
 ## 🔒 安全与隐私提醒
 
@@ -335,38 +334,11 @@ NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 选项解释：
 ## 📈 Star History
 
 <div align="center">
-  <a href="https://star-history.com/#Decohererk/DecoTV&Date">
+  <a href="https://star-history.com/#slepoh/DecoTV&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Decohererk/DecoTV&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Decohererk/DecoTV&type=Date" />
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=slepoh/DecoTV&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=slepoh/DecoTV&type=Date" />
       <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Decohererk/DecoTV&type=Date" />
     </picture>
   </a>
-</div>
-
-## 💝 赞赏支持
-
-如果这个项目对你有所帮助，欢迎 Star ⭐ 本项目或请作者喝杯咖啡 ☕
-
-<div align="center">
-  <table>
-    <tr>
-      <td align="center">
-        <img src="public/wechat.jpg" alt="微信赞赏" width="200">
-        <br>
-        <sub><b>🎨 微信赞赏</b></sub>
-      </td>
-    </tr>
-  </table>
-</div>
-
----
-
-<div align="center">
-  <p>
-    <strong>🌟 如果觉得项目有用，请点个 Star 支持一下！🌟</strong>
-  </p>
-  <p>
-    <sub>Made with ❤️ by <a href="https://github.com/Decohererk">Decohererk</a> and <a href="https://github.com/Decohererk/DecoTV/graphs/contributors">Contributors</a></sub>
-  </p>
 </div>
