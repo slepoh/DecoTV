@@ -171,22 +171,6 @@ function HomeClient() {
   return (
     <PageLayout>
       {/* Hero Neon Logo */}
-      <div className='relative pt-16 sm:pt-20'>
-        <div className='flex items-center justify-center'>
-          <div className='text-center'>
-            <div className='mx-auto w-full px-4'>
-              <div className='inline-block rounded-3xl px-6 py-4 glass-card'>
-                <div className='text-4xl sm:text-6xl font-extrabold tracking-tight neon-text'>
-                  DecoTV
-                </div>
-                <div className='mt-2 text-sm sm:text-base text-gray-600 dark:text-gray-300'>
-                  发现、收藏、继续观看
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
       <div className='px-2 sm:px-10 py-4 sm:py-8 overflow-visible'>
         {/* 顶部 Tab 切换 */}
         <div className='mb-8 flex justify-center'>
@@ -468,9 +452,6 @@ function HomeClient() {
               </section>
             </>
           )}
-
-          {/* DecoTV 底部炫酷卡片 */}
-          <DecoTVFooterCard />
         </div>
       </div>
       {announcement && showAnnouncement && (
