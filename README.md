@@ -51,7 +51,8 @@
 - 📄 **丰富详情页**：支持剧集列表、演员、年份、简介等完整信息展示。
 - ▶️ **流畅在线播放**：集成 HLS.js & ArtPlayer。
 - ❤️ **收藏 + 继续观看**：支持 Kvrocks/Redis/Upstash 存储，多端同步进度。
-- 📱 **PWA**：离线缓存、安装到桌面/主屏，移动端原生体验。
+- � **用户注册系统**：支持用户自助注册（可选），带图形验证码防机器人。
+- �📱 **PWA**：离线缓存、安装到桌面/主屏，移动端原生体验。
 - 🌗 **响应式布局**：桌面侧边栏 + 移动底部导航，自适应各种屏幕尺寸。
 - 👿 **智能去广告**：自动跳过视频中的切片广告（实验性）。
 
@@ -240,42 +241,68 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 
 ## 🌍 环境变量
 
-| 变量                                | 说明                     | 可选值                   | 默认值                                                                                                                     |
-| ----------------------------------- | ------------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| USERNAME                            | 站长账号                 | 任意字符串               | 无默认，必填字段                                                                                                           |
-| PASSWORD                            | 站长密码                 | 任意字符串               | 无默认，必填字段                                                                                                           |
-| SITE_BASE                           | 站点 url                 | 形如 https://example.com | 空                                                                                                                         |
-| NEXT_PUBLIC_SITE_NAME               | 站点名称                 | 任意字符串               | DecoTV                                                                                                                     |
-| ANNOUNCEMENT                        | 站点公告                 | 任意字符串               | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
-| NEXT_PUBLIC_STORAGE_TYPE            | 播放记录/收藏的存储方式  | redis、kvrocks、upstash  | 无默认，必填字段                                                                                                           |
-| KVROCKS_URL                         | kvrocks 连接 url         | 连接 url                 | 空                                                                                                                         |
-| REDIS_URL                           | redis 连接 url           | 连接 url                 | 空                                                                                                                         |
-| UPSTASH_URL                         | upstash redis 连接 url   | 连接 url                 | 空                                                                                                                         |
-| UPSTASH_TOKEN                       | upstash redis 连接 token | 连接 token               | 空                                                                                                                         |
-| NEXT_PUBLIC_SEARCH_MAX_PAGE         | 搜索接口可拉取的最大页数 | 1-50                     | 5                                                                                                                          |
-| NEXT_PUBLIC_DOUBAN_PROXY_TYPE       | 豆瓣数据源请求方式       | 见下方                   | direct                                                                                                                     |
-| NEXT_PUBLIC_DOUBAN_PROXY            | 自定义豆瓣数据代理 URL   | url prefix               | (空)                                                                                                                       |
-| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE | 豆瓣图片代理类型         | 见下方                   | direct                                                                                                                     |
-| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY      | 自定义豆瓣图片代理 URL   | url prefix               | (空)                                                                                                                       |
-| NEXT_PUBLIC_DISABLE_YELLOW_FILTER   | 关闭色情内容过滤         | true/false               | false                                                                                                                      |
-| NEXT_PUBLIC_FLUID_SEARCH            | 是否开启搜索接口流式输出 | true/ false              | true                                                                                                                       |
+### 基础配置
 
-NEXT_PUBLIC_DOUBAN_PROXY_TYPE 选项解释：
+| 变量                  | 说明       | 可选值                   | 默认值                                                                                                                     |
+| --------------------- | ---------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| USERNAME              | 管理员账号 | 任意字符串               | 无默认，**必填**                                                                                                           |
+| PASSWORD              | 管理员密码 | 任意字符串               | 无默认，**必填**                                                                                                           |
+| SITE_BASE             | 站点 URL   | 形如 https://example.com | 空                                                                                                                         |
+| NEXT_PUBLIC_SITE_NAME | 站点名称   | 任意字符串               | DecoTV                                                                                                                     |
+| ANNOUNCEMENT          | 站点公告   | 任意字符串               | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
 
-- direct: 由服务器直接请求豆瓣源站
-- cors-proxy-zwei: 浏览器向 cors proxy 请求豆瓣数据，该 cors proxy 由 [Zwei](https://github.com/bestzwei) 搭建
-- cmliussss-cdn-tencent: 浏览器向豆瓣 CDN 请求数据，该 CDN 由 [CMLiussss](https://github.com/cmliu) 搭建，并由腾讯云 cdn 提供加速
-- cmliussss-cdn-ali: 浏览器向豆瓣 CDN 请求数据，该 CDN 由 [CMLiussss](https://github.com/cmliu) 搭建，并由阿里云 cdn 提供加速
-- custom: 用户自定义 proxy，由 NEXT_PUBLIC_DOUBAN_PROXY 定义
+### 存储配置
 
-NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 选项解释：
+| 变量                     | 说明                    | 可选值                  | 默认值           | 备注                           |
+| ------------------------ | ----------------------- | ----------------------- | ---------------- | ------------------------------ |
+| NEXT_PUBLIC_STORAGE_TYPE | 存储类型                | redis、kvrocks、upstash | 无默认，**必填** | 三选一，推荐使用 kvrocks       |
+| KVROCKS_URL              | Kvrocks 数据库连接地址  | redis://host:port       | 空               | 当 STORAGE_TYPE=kvrocks 时必填 |
+| REDIS_URL                | Redis 数据库连接地址    | redis://host:port       | 空               | 当 STORAGE_TYPE=redis 时必填   |
+| UPSTASH_URL              | Upstash Redis REST URL  | https://xxx.upstash.io  | 空               | 当 STORAGE_TYPE=upstash 时必填 |
+| UPSTASH_TOKEN            | Upstash Redis REST 令牌 | AUxxxx...               | 空               | 当 STORAGE_TYPE=upstash 时必填 |
 
-- direct：由浏览器直接请求豆瓣分配的默认图片域名
-- server：由服务器代理请求豆瓣分配的默认图片域名
-- img3：由浏览器请求豆瓣官方的精品 cdn（阿里云）
-- cmliussss-cdn-tencent：由浏览器请求豆瓣 CDN，该 CDN 由 [CMLiussss](https://github.com/cmliu) 搭建，并由腾讯云 cdn 提供加速
-- cmliussss-cdn-ali：由浏览器请求豆瓣 CDN，该 CDN 由 [CMLiussss](https://github.com/cmliu) 搭建，并由阿里云 cdn 提供加速
-- custom: 用户自定义 proxy，由 NEXT_PUBLIC_DOUBAN_IMAGE_PROXY 定义
+> **注意**：Upstash 使用 REST API 连接，需要填写 `UPSTASH_URL`（HTTPS ENDPOINT）和 `UPSTASH_TOKEN`，不是传统的 Redis 连接字符串。
+
+### 用户注册配置
+
+| 变量                            | 说明             | 可选值     | 默认值 | 备注                                 |
+| ------------------------------- | ---------------- | ---------- | ------ | ------------------------------------ |
+| NEXT_PUBLIC_ENABLE_REGISTRATION | 是否开启用户注册 | true/false | false  | 开启后用户可以自助注册，建议用完即关 |
+
+> **安全提示**：注册功能默认关闭，仅在需要时临时开启。建议注册完成后立即设置为 `false` 或删除该变量。详见 [用户注册功能说明](./docs/用户注册功能说明.md)
+
+### 高级配置
+
+| 变量                                | 说明                     | 可选值     | 默认值 | 备注            |
+| ----------------------------------- | ------------------------ | ---------- | ------ | --------------- |
+| NEXT_PUBLIC_SEARCH_MAX_PAGE         | 搜索接口可拉取的最大页数 | 1-50       | 5      | 数值越大越慢    |
+| NEXT_PUBLIC_DOUBAN_PROXY_TYPE       | 豆瓣数据源请求方式       | 见下方说明 | direct | -               |
+| NEXT_PUBLIC_DOUBAN_PROXY            | 自定义豆瓣数据代理 URL   | URL prefix | 空     | custom 模式使用 |
+| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE | 豆瓣图片代理类型         | 见下方说明 | direct | -               |
+| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY      | 自定义豆瓣图片代理 URL   | URL prefix | 空     | custom 模式使用 |
+| NEXT_PUBLIC_DISABLE_YELLOW_FILTER   | 关闭色情内容过滤         | true/false | false  | 不建议开启      |
+| NEXT_PUBLIC_FLUID_SEARCH            | 是否开启搜索接口流式输出 | true/false | true   | -               |
+
+#### NEXT_PUBLIC_DOUBAN_PROXY_TYPE 可选值
+
+| 值                    | 说明                                                                               |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| direct                | 服务器直接请求豆瓣源站（默认）                                                     |
+| cors-proxy-zwei       | 浏览器通过 [Zwei](https://github.com/bestzwei) 提供的 CORS Proxy 请求豆瓣数据      |
+| cmliussss-cdn-tencent | 浏览器通过 [CMLiussss](https://github.com/cmliu) 提供的腾讯云 CDN 加速请求豆瓣数据 |
+| cmliussss-cdn-ali     | 浏览器通过 [CMLiussss](https://github.com/cmliu) 提供的阿里云 CDN 加速请求豆瓣数据 |
+| custom                | 使用自定义代理（需配置 NEXT_PUBLIC_DOUBAN_PROXY）                                  |
+
+#### NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 可选值
+
+| 值                    | 说明                                                        |
+| --------------------- | ----------------------------------------------------------- |
+| direct                | 浏览器直接请求豆瓣图片域名（默认）                          |
+| server                | 服务器代理请求豆瓣图片                                      |
+| img3                  | 使用豆瓣官方精品 CDN（阿里云）                              |
+| cmliussss-cdn-tencent | 使用 [CMLiussss](https://github.com/cmliu) 提供的腾讯云 CDN |
+| cmliussss-cdn-ali     | 使用 [CMLiussss](https://github.com/cmliu) 提供的阿里云 CDN |
+| custom                | 使用自定义代理（需配置 NEXT_PUBLIC_DOUBAN_IMAGE_PROXY）     |
 
 ## Roadmap
 
@@ -293,11 +320,36 @@ NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 选项解释：
 
 已实现播放记录和网页端同步
 
+**详细配置指南**：[OrionTV 使用指南](./docs/OrionTV使用指南.md)
+
 ## 🎥 TVbox 配置
 
 具体可见 [TVBox 配置优化说明](https://github.com/slepoh/DecoTV/blob/main/TVBox%E9%85%8D%E7%BD%AE%E4%BC%98%E5%8C%96%E8%AF%B4%E6%98%8E.md) ,详细功能见/admin 管理页面 **TVbox 配置**
 
-## 🔒 安全与隐私提醒
+## � 用户注册功能
+
+DecoTV 支持用户自助注册功能（可选），适合需要允许用户自行创建账号的场景。
+
+**功能特性**：
+
+- ✅ 图形验证码防机器人注册
+- ✅ 严格的用户名和密码验证
+- ✅ 环境变量一键开关（默认关闭）
+- ✅ 仅支持 Redis/Upstash/Kvrocks 存储模式
+
+**详细使用指南**：[用户注册功能说明](./docs/用户注册功能说明.md)
+
+**快速启用**：
+
+```bash
+# 在环境变量中设置
+NEXT_PUBLIC_ENABLE_REGISTRATION=true
+NEXT_PUBLIC_STORAGE_TYPE=redis  # 或 upstash、kvrocks
+```
+
+> ⚠️ **安全提示**：建议默认关闭注册，仅在需要时临时开启，注册完成后立即关闭。
+
+## �🔒 安全与隐私提醒
 
 ### 请设置密码保护并关闭公网注册
 

@@ -127,6 +127,7 @@ function shouldSkipAuth(pathname: string): boolean {
     '/screenshot.png',
     '/api/tvbox/config',
     '/api/tvbox/diagnose',
+    '/register', // 允许访问注册页面
   ];
 
   return skipPaths.some((path) => pathname.startsWith(path));
