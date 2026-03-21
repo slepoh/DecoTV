@@ -73,6 +73,7 @@ interface WakeLockSentinel {
 
 // 弹幕播放器偏好设置持久化
 const DANMUKU_SETTINGS_KEY = 'decotv_danmuku_settings';
+const PLAYER_PLAYBACK_RATE_KEY = 'decotv_player_playback_rate';
 type DanmukuMode = 0 | 1 | 2;
 type DanmukuMarginValue = number | `${number}%`;
 
@@ -95,6 +96,32 @@ const DEFAULT_DANMUKU_SETTINGS: DanmukuSettings = {
   antiOverlap: true,
   visible: true,
 };
+
+function sanitizePlaybackRate(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 1.0;
+  }
+
+  // 与 Artplayer 可选倍速保持一致，避免写入异常值
+  const allowedRates = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+  return allowedRates.includes(value) ? value : 1.0;
+}
+
+function loadPlaybackRate(): number {
+  if (typeof window === 'undefined') {
+    return 1.0;
+  }
+
+  try {
+    const raw = localStorage.getItem(PLAYER_PLAYBACK_RATE_KEY);
+    if (!raw) {
+      return 1.0;
+    }
+    return sanitizePlaybackRate(Number(raw));
+  } catch {
+    return 1.0;
+  }
+}
 
 function sanitizeDanmukuMode(value: unknown): DanmukuMode[] {
   if (!Array.isArray(value)) {
@@ -352,6 +379,10 @@ function PlayPageClient() {
   const lastVolumeRef = useRef<number>(0.7);
   // 上次使用的播放速率，默认 1.0
   const lastPlaybackRateRef = useRef<number>(1.0);
+
+  useEffect(() => {
+    lastPlaybackRateRef.current = loadPlaybackRate();
+  }, []);
 
   // 换源相关状态
   const [availableSources, setAvailableSources] = useState<SearchResult[]>([]);
@@ -2586,7 +2617,17 @@ function PlayPageClient() {
         lastVolumeRef.current = artPlayerRef.current.volume;
       });
       artPlayerRef.current.on('video:ratechange', () => {
-        lastPlaybackRateRef.current = artPlayerRef.current.playbackRate;
+        lastPlaybackRateRef.current = sanitizePlaybackRate(
+          artPlayerRef.current.playbackRate,
+        );
+        try {
+          localStorage.setItem(
+            PLAYER_PLAYBACK_RATE_KEY,
+            String(lastPlaybackRateRef.current),
+          );
+        } catch {
+          // ignore
+        }
       });
 
       // 监听视频可播放事件，这时恢复播放进度更可靠
@@ -2616,8 +2657,7 @@ function PlayPageClient() {
           if (
             Math.abs(
               artPlayerRef.current.playbackRate - lastPlaybackRateRef.current,
-            ) > 0.01 &&
-            isWebkit
+            ) > 0.01
           ) {
             artPlayerRef.current.playbackRate = lastPlaybackRateRef.current;
           }
