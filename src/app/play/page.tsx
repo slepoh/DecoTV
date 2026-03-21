@@ -253,10 +253,25 @@ function PlayPageClient() {
     enable: boolean;
     intro_time: number;
     outro_time: number;
+    preset_id?: string;
+    preset_name?: string;
+    preset_category?:
+      | '通用'
+      | '动漫'
+      | '欧美剧'
+      | '日剧'
+      | '韩剧'
+      | '综艺'
+      | '纪录片';
+    preset_pinned?: boolean;
   }>({
     enable: false,
     intro_time: 0,
     outro_time: 0,
+    preset_id: undefined,
+    preset_name: undefined,
+    preset_category: undefined,
+    preset_pinned: undefined,
   });
   const skipConfigRef = useRef(skipConfig);
   useEffect(() => {
@@ -1419,6 +1434,17 @@ function PlayPageClient() {
     enable: boolean;
     intro_time: number;
     outro_time: number;
+    preset_id?: string;
+    preset_name?: string;
+    preset_category?:
+      | '通用'
+      | '动漫'
+      | '欧美剧'
+      | '日剧'
+      | '韩剧'
+      | '综艺'
+      | '纪录片';
+    preset_pinned?: boolean;
   }) => {
     if (!currentSourceRef.current || !currentIdRef.current) return;
 
@@ -2693,7 +2719,7 @@ function PlayPageClient() {
             skipConfigRef.current.intro_time,
           );
           artPlayerRef.current.currentTime = skipConfigRef.current.intro_time;
-          artPlayerRef.current.notice.show = `✨ 已跳过片头，跳到 ${formatTime(
+          artPlayerRef.current.notice.show = `已跳过片头，跳到 ${formatTime(
             skipConfigRef.current.intro_time,
           )}`;
         }
@@ -2710,12 +2736,12 @@ function PlayPageClient() {
             currentEpisodeIndexRef.current <
             (detailRef.current?.episodes?.length || 1) - 1
           ) {
-            artPlayerRef.current.notice.show = `⏭️ 已跳过片尾，自动播放下一集`;
+            artPlayerRef.current.notice.show = `已跳过片尾，自动播放下一集`;
             setTimeout(() => {
               handleNextEpisode();
             }, 500);
           } else {
-            artPlayerRef.current.notice.show = `✅ 已跳过片尾（已是最后一集）`;
+            artPlayerRef.current.notice.show = `已跳过片尾（已是最后一集）`;
             artPlayerRef.current.pause();
           }
         }
@@ -2987,8 +3013,34 @@ function PlayPageClient() {
               />
             </svg>
             <span>{skipConfig.enable ? '已跳过' : '跳过'}</span>
+            {skipConfig.enable && skipConfig.preset_name && (
+              <span className='max-w-24 truncate'>
+                · {skipConfig.preset_name}
+              </span>
+            )}
           </button>
         </div>
+
+        {skipConfig.enable && skipConfig.preset_name && (
+          <div className='flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300'>
+            <span className='px-2 py-1 rounded-md border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800'>
+              当前预设
+            </span>
+            <span className='font-medium truncate max-w-40'>
+              {skipConfig.preset_name}
+            </span>
+            {skipConfig.preset_category && (
+              <span className='px-2 py-1 rounded-md border border-gray-300 dark:border-gray-600'>
+                {skipConfig.preset_category}
+              </span>
+            )}
+            {skipConfig.preset_pinned && (
+              <span className='px-2 py-1 rounded-md border border-amber-300 text-amber-700 dark:border-amber-600 dark:text-amber-300'>
+                置顶
+              </span>
+            )}
+          </div>
+        )}
         {/* 第二行：播放器和选集 */}
         <div className='space-y-2'>
           {/* 折叠控制和跳过设置 - 仅在 lg 及以上屏幕显示 */}
@@ -3017,7 +3069,11 @@ function PlayPageClient() {
                 />
               </svg>
               <span className='text-sm font-medium'>
-                {skipConfig.enable ? '✨ 跳过已启用' : '⚙️ 跳过设置'}
+                {skipConfig.enable
+                  ? skipConfig.preset_name
+                    ? `${skipConfig.preset_name}`
+                    : '跳过已启用'
+                  : '跳过设置'}
               </span>
               {skipConfig.enable && (
                 <div className='absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full animate-pulse'></div>
@@ -3471,6 +3527,8 @@ function PlayPageClient() {
           onChange={handleSkipConfigChange}
           videoDuration={artPlayerRef.current?.duration || 0}
           currentTime={artPlayerRef.current?.currentTime || 0}
+          videoTitle={videoTitle}
+          videoTypeName={detail?.type_name || ''}
         />
       )}
 

@@ -91,6 +91,19 @@ export async function POST(request: NextRequest) {
       enable: Boolean(config.enable),
       intro_time: Number(config.intro_time) || 0,
       outro_time: Number(config.outro_time) || 0,
+      preset_id:
+        typeof config.preset_id === 'string' && config.preset_id
+          ? config.preset_id
+          : undefined,
+      preset_name:
+        typeof config.preset_name === 'string' && config.preset_name
+          ? String(config.preset_name).trim().slice(0, 20)
+          : undefined,
+      preset_category:
+        typeof config.preset_category === 'string' && config.preset_category
+          ? (config.preset_category as SkipConfig['preset_category'])
+          : undefined,
+      preset_pinned: Boolean(config.preset_pinned),
     };
 
     await db.setSkipConfig(authInfo.username, source, id, skipConfig);
