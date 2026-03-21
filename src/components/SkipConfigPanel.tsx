@@ -682,6 +682,24 @@ export default function SkipConfigPanel({
                   ).length;
                   const addCount =
                     pendingImportedPresets.length - overwriteCount;
+                  const conflictNames = Array.from(
+                    new Set(
+                      presets
+                        .filter((localItem) =>
+                          pendingImportedPresets.some(
+                            (item) =>
+                              localItem.id === item.id ||
+                              byName(localItem.name) === byName(item.name),
+                          ),
+                        )
+                        .map((item) => item.name),
+                    ),
+                  );
+                  const conflictPreviewNames = conflictNames.slice(0, 10);
+                  const hiddenConflictCount = Math.max(
+                    conflictNames.length - conflictPreviewNames.length,
+                    0,
+                  );
 
                   return (
                     <>
@@ -692,6 +710,28 @@ export default function SkipConfigPanel({
                       <div className='text-xs text-gray-600 dark:text-gray-300 mb-3'>
                         预览：将覆盖 {overwriteCount} 条，新增 {addCount} 条。
                       </div>
+                      {conflictPreviewNames.length > 0 && (
+                        <div className='mb-3 rounded-md border border-amber-200 bg-amber-50/70 p-2 dark:border-amber-700/60 dark:bg-amber-900/20'>
+                          <div className='mb-1 text-xs text-amber-800 dark:text-amber-300'>
+                            冲突明细预览（前 10 条）：
+                          </div>
+                          <div className='flex flex-wrap gap-1.5'>
+                            {conflictPreviewNames.map((name) => (
+                              <span
+                                key={name}
+                                className='rounded-full border border-amber-300 bg-white/80 px-2 py-0.5 text-xs text-amber-900 dark:border-amber-600 dark:bg-amber-900/40 dark:text-amber-200'
+                              >
+                                {name}
+                              </span>
+                            ))}
+                            {hiddenConflictCount > 0 && (
+                              <span className='rounded-full border border-amber-300 bg-white/80 px-2 py-0.5 text-xs text-amber-900 dark:border-amber-600 dark:bg-amber-900/40 dark:text-amber-200'>
+                                还有 {hiddenConflictCount} 条
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </>
                   );
                 })()}
