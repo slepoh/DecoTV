@@ -2,7 +2,7 @@
 
 import { Loader2, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { POSTER_FALLBACK_SRC } from '@/lib/image-url';
 
@@ -82,7 +82,16 @@ interface LibraryStatusResponse {
   error?: string;
 }
 
+interface QueryCacheEntry {
+  items: LibraryItem[];
+  categories: LibraryCategoryItem[];
+  pagination: PaginationPayload;
+  connectorErrors: LibraryErrorItem[];
+  fetchedAt: number;
+}
+
 const PAGE_SIZE = 24;
+const AUTO_LOAD_ROOT_MARGIN = '720px 0px';
 
 const SOURCE_BADGE_STYLES: Record<ConnectorType, string> = {
   xiaoya:
@@ -156,6 +165,7 @@ function getConnectorUiLabel(
       item.displayName?.trim() ||
       item.name ||
       item.typeLabel;
+
     return itemLabel === baseLabel;
   }).length;
 
@@ -175,7 +185,71 @@ function mediaTypeLabel(item: LibraryItem): string {
 }
 
 function formatSourceLabel(item: LibraryItem): string {
-  return item.connectorSourceName;
+  return (
+    item.connectorSourceName || item.connectorDisplayName || item.connectorName
+  );
+}
+
+function makeQueryKey(
+  selectedSource: string,
+  selectedCategory: string,
+  searchKeyword: string,
+): string {
+  return [
+    selectedSource || 'all',
+    selectedCategory || 'all',
+    searchKeyword || '',
+  ]
+    .map((value) => encodeURIComponent(value))
+    .join('::');
+}
+
+function makePageKey(queryKey: string, offset: number): string {
+  return `${queryKey}::${offset}`;
+}
+
+function buildRequestQuery(params: {
+  connectorId?: string;
+  category?: string;
+  keyword?: string;
+  offset?: number;
+  limit?: number;
+  refresh?: boolean;
+}): URLSearchParams {
+  const query = new URLSearchParams();
+  query.set('offset', String(params.offset ?? 0));
+  query.set('limit', String(params.limit ?? PAGE_SIZE));
+
+  if (params.connectorId && params.connectorId !== 'all') {
+    query.set('connectorId', params.connectorId);
+  }
+
+  if (params.category && params.category !== 'all') {
+    query.set('category', params.category);
+  }
+
+  if (params.keyword) {
+    query.set('q', params.keyword);
+  }
+
+  if (params.refresh) {
+    query.set('refresh', '1');
+  }
+
+  return query;
+}
+
+function createCacheEntryFromResponse(
+  response: LibraryItemsResponse,
+  itemsOverride?: LibraryItem[],
+): QueryCacheEntry {
+  return {
+    items: itemsOverride ?? response.items ?? [],
+    categories: response.categories ?? [],
+    pagination: response.pagination ?? defaultPagination(),
+    connectorErrors: response.errors ?? [],
+    fetchedAt: Date.now(),
+  };
 }
 
 export default function MyLibraryPage() {
@@ -196,6 +270,38 @@ export default function MyLibraryPage() {
   const [pagination, setPagination] =
     useState<PaginationPayload>(defaultPagination());
 
+  const queryCacheRef = useRef<Map<string, QueryCacheEntry>>(new Map());
+  const pageCacheRef = useRef<Map<string, LibraryItemsResponse>>(new Map());
+  const warmingQueryRef = useRef<Set<string>>(new Set());
+  const inFlightPageRef = useRef<Set<string>>(new Set());
+  const autoLoadLockRef = useRef('');
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const itemsRef = useRef<LibraryItem[]>([]);
+  const categoriesRef = useRef<LibraryCategoryItem[]>([]);
+  const connectorErrorsRef = useRef<LibraryErrorItem[]>([]);
+  const paginationRef = useRef<PaginationPayload>(defaultPagination());
+
+  const queryKey = useMemo(
+    () => makeQueryKey(selectedSource, selectedCategory, searchKeyword),
+    [searchKeyword, selectedCategory, selectedSource],
+  );
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    categoriesRef.current = categories;
+  }, [categories]);
+
+  useEffect(() => {
+    connectorErrorsRef.current = connectorErrors;
+  }, [connectorErrors]);
+
+  useEffect(() => {
+    paginationRef.current = pagination;
+  }, [pagination]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setSearchKeyword(keyword.trim());
@@ -204,20 +310,143 @@ export default function MyLibraryPage() {
     return () => window.clearTimeout(timer);
   }, [keyword]);
 
-  const fetchConnectors = useCallback(async () => {
-    try {
-      const resp = await fetch('/api/private-library/status', {
+  const applyQueryEntry = useCallback((entry: QueryCacheEntry) => {
+    setItems(entry.items);
+    setCategories(entry.categories);
+    setPagination(entry.pagination);
+    setConnectorErrors(entry.connectorErrors);
+    setError('');
+  }, []);
+
+  const requestPage = useCallback(
+    async ({
+      connectorId,
+      category,
+      keyword: currentKeyword,
+      offset,
+      refresh,
+    }: {
+      connectorId: string;
+      category: string;
+      keyword: string;
+      offset: number;
+      refresh?: boolean;
+    }): Promise<LibraryItemsResponse> => {
+      const query = buildRequestQuery({
+        connectorId,
+        category,
+        keyword: currentKeyword,
+        offset,
+        limit: PAGE_SIZE,
+        refresh,
+      });
+      const response = await fetch(`/api/private-library/items?${query}`, {
         cache: 'no-store',
       });
-      const data = (await resp.json()) as LibraryStatusResponse;
+      const data = (await response.json()) as LibraryItemsResponse;
 
-      if (!resp.ok) {
+      if (!response.ok) {
+        throw new Error(data.error || data.details || '读取私人影库失败');
+      }
+
+      return data;
+    },
+    [],
+  );
+
+  const primePageCache = useCallback(
+    async ({
+      queryKey: targetQueryKey,
+      connectorId,
+      category,
+      keyword: currentKeyword,
+      offset,
+    }: {
+      queryKey: string;
+      connectorId: string;
+      category: string;
+      keyword: string;
+      offset: number;
+    }) => {
+      const pageKey = makePageKey(targetQueryKey, offset);
+      if (
+        pageCacheRef.current.has(pageKey) ||
+        inFlightPageRef.current.has(pageKey)
+      ) {
+        return;
+      }
+
+      inFlightPageRef.current.add(pageKey);
+      try {
+        const data = await requestPage({
+          connectorId,
+          category,
+          keyword: currentKeyword,
+          offset,
+        });
+        pageCacheRef.current.set(pageKey, data);
+      } catch {
+        // 静默预热失败，避免打断当前页面交互。
+      } finally {
+        inFlightPageRef.current.delete(pageKey);
+      }
+    },
+    [requestPage],
+  );
+
+  const warmConnectorCache = useCallback(
+    async (connectorId: string) => {
+      const sourceQueryKey = makeQueryKey(connectorId, 'all', '');
+      if (
+        queryCacheRef.current.has(sourceQueryKey) ||
+        warmingQueryRef.current.has(sourceQueryKey)
+      ) {
+        return;
+      }
+
+      warmingQueryRef.current.add(sourceQueryKey);
+      try {
+        const data = await requestPage({
+          connectorId,
+          category: 'all',
+          keyword: '',
+          offset: 0,
+        });
+        const entry = createCacheEntryFromResponse(data);
+        queryCacheRef.current.set(sourceQueryKey, entry);
+
+        if (entry.pagination.hasMore) {
+          void primePageCache({
+            queryKey: sourceQueryKey,
+            connectorId,
+            category: 'all',
+            keyword: '',
+            offset: entry.pagination.nextOffset,
+          });
+        }
+      } catch {
+        // 来源预热失败时不影响当前页面。
+      } finally {
+        warmingQueryRef.current.delete(sourceQueryKey);
+      }
+    },
+    [primePageCache, requestPage],
+  );
+
+  const fetchConnectors = useCallback(async () => {
+    try {
+      const response = await fetch('/api/private-library/status', {
+        cache: 'no-store',
+      });
+      const data = (await response.json()) as LibraryStatusResponse;
+
+      if (!response.ok) {
         throw new Error(data.error || '读取影库来源失败');
       }
 
       setConnectors(data.connectors || []);
     } catch {
-      // 来源栏读取失败时不阻断主内容请求。
+      // 保留已存在的来源信息，避免界面来源栏闪烁。
     }
   }, []);
 
@@ -231,6 +460,65 @@ export default function MyLibraryPage() {
       offset?: number;
       forceRefresh?: boolean;
     } = {}) => {
+      if (!append && !forceRefresh) {
+        const cached = queryCacheRef.current.get(queryKey);
+        if (cached) {
+          applyQueryEntry(cached);
+          setLoading(false);
+
+          if (cached.pagination.hasMore) {
+            void primePageCache({
+              queryKey,
+              connectorId: selectedSource,
+              category: selectedCategory,
+              keyword: searchKeyword,
+              offset: cached.pagination.nextOffset,
+            });
+          }
+          return;
+        }
+      }
+
+      if (append && !forceRefresh) {
+        const pageKey = makePageKey(queryKey, offset);
+        const prefetched = pageCacheRef.current.get(pageKey);
+        if (prefetched) {
+          pageCacheRef.current.delete(pageKey);
+
+          const previousEntry =
+            queryCacheRef.current.get(queryKey) ||
+            createCacheEntryFromResponse(
+              {
+                categories: categoriesRef.current,
+                errors: connectorErrorsRef.current,
+                pagination: paginationRef.current,
+              },
+              itemsRef.current,
+            );
+          const mergedItems = mergeLibraryItems(
+            previousEntry.items,
+            prefetched.items || [],
+          );
+          const nextEntry = createCacheEntryFromResponse(
+            prefetched,
+            mergedItems,
+          );
+          queryCacheRef.current.set(queryKey, nextEntry);
+          applyQueryEntry(nextEntry);
+
+          if (nextEntry.pagination.hasMore) {
+            void primePageCache({
+              queryKey,
+              connectorId: selectedSource,
+              category: selectedCategory,
+              keyword: searchKeyword,
+              offset: nextEntry.pagination.nextOffset,
+            });
+          }
+          return;
+        }
+      }
+
       if (append) {
         setLoadingMore(true);
       } else if (forceRefresh) {
@@ -241,56 +529,55 @@ export default function MyLibraryPage() {
 
       try {
         setError('');
-        if (!append) {
-          setConnectorErrors([]);
-        }
+        const data = await requestPage({
+          connectorId: selectedSource,
+          category: selectedCategory,
+          keyword: searchKeyword,
+          offset,
+          refresh: forceRefresh,
+        });
 
-        const query = new URLSearchParams();
-        query.set('offset', String(offset));
-        query.set('limit', String(PAGE_SIZE));
-        if (selectedSource !== 'all') {
-          query.set('connectorId', selectedSource);
-        }
-        if (selectedCategory !== 'all') {
-          query.set('category', selectedCategory);
-        }
-        if (searchKeyword) {
-          query.set('q', searchKeyword);
-        }
-        if (forceRefresh) {
-          query.set('refresh', '1');
-        }
+        const previousEntry =
+          append && queryCacheRef.current.has(queryKey)
+            ? queryCacheRef.current.get(queryKey)
+            : null;
+        const nextItems = append
+          ? mergeLibraryItems(
+              previousEntry?.items || itemsRef.current,
+              data.items || [],
+            )
+          : data.items || [];
+        const nextEntry = createCacheEntryFromResponse(data, nextItems);
+        queryCacheRef.current.set(queryKey, nextEntry);
+        pageCacheRef.current.delete(makePageKey(queryKey, offset));
+        applyQueryEntry(nextEntry);
 
-        const resp = await fetch(
-          `/api/private-library/items?${query.toString()}`,
-          {
-            cache: 'no-store',
-          },
-        );
-        const data = (await resp.json()) as LibraryItemsResponse;
-
-        if (!resp.ok) {
-          throw new Error(data.error || data.details || '读取私人影库失败');
-        }
-
-        const nextItems = data.items || [];
-        setItems((currentItems) =>
-          append ? mergeLibraryItems(currentItems, nextItems) : nextItems,
-        );
-        setCategories(data.categories || []);
-        setPagination(data.pagination || defaultPagination());
-        setConnectorErrors(data.errors || []);
         if ((data.connectors || []).length > 0) {
           setConnectors((current) =>
             current.length > 0 ? current : data.connectors || current,
           );
         }
+
+        if (nextEntry.pagination.hasMore) {
+          void primePageCache({
+            queryKey,
+            connectorId: selectedSource,
+            category: selectedCategory,
+            keyword: searchKeyword,
+            offset: nextEntry.pagination.nextOffset,
+          });
+        }
       } catch (currentError) {
         if (!append) {
-          setItems([]);
-          setCategories([]);
-          setPagination(defaultPagination());
-          setConnectorErrors([]);
+          const cached = queryCacheRef.current.get(queryKey);
+          if (cached) {
+            applyQueryEntry(cached);
+          } else {
+            setItems([]);
+            setCategories([]);
+            setPagination(defaultPagination());
+            setConnectorErrors([]);
+          }
         }
 
         setError(
@@ -300,11 +587,19 @@ export default function MyLibraryPage() {
         );
       } finally {
         setLoading(false);
-        setRefreshing(false);
         setLoadingMore(false);
+        setRefreshing(false);
       }
     },
-    [searchKeyword, selectedCategory, selectedSource],
+    [
+      applyQueryEntry,
+      primePageCache,
+      queryKey,
+      requestPage,
+      searchKeyword,
+      selectedCategory,
+      selectedSource,
+    ],
   );
 
   useEffect(() => {
@@ -335,21 +630,80 @@ export default function MyLibraryPage() {
     }
   }, [categories, selectedCategory]);
 
+  useEffect(() => {
+    if (connectors.length <= 1) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      for (const connector of connectors) {
+        void warmConnectorCache(connector.id);
+      }
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [connectors, warmConnectorCache]);
+
+  useEffect(() => {
+    autoLoadLockRef.current = '';
+  }, [queryKey]);
+
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node || !pagination.hasMore || loading || error) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry?.isIntersecting || loadingMore) {
+          return;
+        }
+
+        const nextLoadKey = `${queryKey}:${pagination.nextOffset}`;
+        if (autoLoadLockRef.current === nextLoadKey) {
+          return;
+        }
+
+        autoLoadLockRef.current = nextLoadKey;
+        void fetchItems({
+          append: true,
+          offset: pagination.nextOffset,
+        });
+      },
+      {
+        rootMargin: AUTO_LOAD_ROOT_MARGIN,
+      },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [
+    error,
+    fetchItems,
+    loading,
+    loadingMore,
+    pagination.hasMore,
+    pagination.nextOffset,
+    queryKey,
+  ]);
+
   const activeSummary = useMemo(() => {
     const currentCategory = categories.find(
       (item) => item.key === selectedCategory,
     );
-    const sourceCountLabel =
+    const sourceLabel =
       selectedSource === 'all'
         ? '全部来源'
         : connectors.find((item) => item.id === selectedSource)?.sourceName ||
           '当前来源';
 
     if (currentCategory) {
-      return `${sourceCountLabel} · ${currentCategory.label} · ${currentCategory.count}`;
+      return `${sourceLabel} · ${currentCategory.label} · ${currentCategory.count}`;
     }
 
-    return `${sourceCountLabel} · 共 ${pagination.total} 条`;
+    return `${sourceLabel} · 共 ${pagination.total} 部资源`;
   }, [
     categories,
     connectors,
@@ -448,8 +802,8 @@ export default function MyLibraryPage() {
                 我的影库
               </h1>
               <p className='mt-1 text-sm text-slate-300/90'>
-                聚合已接入的 OpenList、小雅 Alist、Emby、Jellyfin
-                私人媒体资源，支持按来源、分类和关键词快速浏览。
+                聚合已接入的 OpenList、小雅 Alist、Emby、Jellyfin 私人媒体资源，
+                支持按来源、分类和关键词快速浏览。
               </p>
             </div>
             <div className='inline-flex rounded-full border border-emerald-300/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200'>
@@ -470,6 +824,11 @@ export default function MyLibraryPage() {
             <button
               type='button'
               onClick={() => {
+                queryCacheRef.current.clear();
+                pageCacheRef.current.clear();
+                warmingQueryRef.current.clear();
+                inFlightPageRef.current.clear();
+                autoLoadLockRef.current = '';
                 void fetchConnectors();
                 void fetchItems({
                   append: false,
@@ -542,6 +901,7 @@ export default function MyLibraryPage() {
             <div className='mt-4 flex flex-wrap gap-2'>
               {categories.map((category) => {
                 const active = category.key === selectedCategory;
+
                 return (
                   <button
                     key={category.key}
@@ -624,31 +984,30 @@ export default function MyLibraryPage() {
 
             <div className='flex flex-col items-center gap-3'>
               <p className='text-xs text-slate-400'>
-                已显示 {items.length} / {pagination.total} 条资源
+                已显示 {items.length} / {pagination.total} 部资源
               </p>
 
               {pagination.hasMore ? (
-                <button
-                  type='button'
-                  onClick={() =>
-                    void fetchItems({
-                      append: true,
-                      offset: pagination.nextOffset,
-                    })
-                  }
-                  disabled={loadingMore}
-                  className='inline-flex min-w-36 items-center justify-center gap-2 rounded-xl border border-slate-600/70 bg-slate-900/55 px-5 py-2.5 text-sm text-slate-100 transition-colors hover:border-emerald-400/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60'
+                <div
+                  ref={loadMoreRef}
+                  className='flex min-h-14 items-center justify-center'
                 >
                   {loadingMore ? (
-                    <>
+                    <div className='inline-flex items-center gap-2 rounded-xl border border-slate-600/70 bg-slate-900/55 px-5 py-2.5 text-sm text-slate-100'>
                       <Loader2 className='h-4 w-4 animate-spin' />
-                      正在加载...
-                    </>
+                      正在加载更多资源...
+                    </div>
                   ) : (
-                    '加载更多'
+                    <div className='rounded-xl border border-dashed border-white/10 bg-slate-900/45 px-5 py-2 text-xs text-slate-400'>
+                      下滑到底部会自动加载更多
+                    </div>
                   )}
-                </button>
-              ) : null}
+                </div>
+              ) : (
+                <div className='rounded-xl border border-dashed border-white/10 bg-slate-900/45 px-5 py-2 text-xs text-slate-400'>
+                  当前来源的资源已经全部加载完成
+                </div>
+              )}
             </div>
           </>
         ) : null}

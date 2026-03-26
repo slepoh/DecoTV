@@ -326,34 +326,50 @@ export async function GET(request: NextRequest) {
         typeLabel: getPrivateLibraryConnectorTypeLabel(connector.type),
       }),
     );
+    const connectorResults = await Promise.allSettled(
+      targetConnectors.map(async (connector) => {
+        let items = forceRefresh ? [] : getConnectorCachedItems(connector.id);
+
+        if (items.length === 0) {
+          items = await scanConnector(connector);
+        }
+
+        return {
+          connector,
+          items,
+        };
+      }),
+    );
+
     const merged: MergedLibraryItem[] = [];
     const errors: ErrorPayload[] = [];
 
-    for (const connector of targetConnectors) {
-      let items = forceRefresh ? [] : getConnectorCachedItems(connector.id);
-
-      if (items.length === 0) {
-        try {
-          items = await scanConnector(connector);
-        } catch (error) {
-          errors.push({
-            connectorId: connector.id,
-            connectorName: connector.name,
-            error: toPrivateLibraryErrorMessage(error),
-          });
-          continue;
+    connectorResults.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        const connector = targetConnectors[index];
+        if (!connector) {
+          return;
         }
+
+        errors.push({
+          connectorId: connector.id,
+          connectorName: connector.name,
+          error: toPrivateLibraryErrorMessage(result.reason),
+        });
+        return;
       }
 
-      for (const item of items) {
+      for (const item of result.value.items) {
         merged.push({
           ...item,
-          connectorName: connector.name,
-          connectorDisplayName: connector.displayName,
-          connectorSourceName: formatPrivateLibrarySourceName(connector),
+          connectorName: result.value.connector.name,
+          connectorDisplayName: result.value.connector.displayName,
+          connectorSourceName: formatPrivateLibrarySourceName(
+            result.value.connector,
+          ),
         });
       }
-    }
+    });
 
     const normalizedQuery = normalizeText(query);
     const queryFiltered = sortItems(

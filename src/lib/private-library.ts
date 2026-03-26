@@ -199,6 +199,7 @@ const PRIVATE_LIBRARY_CACHE_PREFIX = 'private-lib';
 const PRIVATE_LIBRARY_CONTROL_TIMEOUT_MS = 12_000;
 const PRIVATE_LIBRARY_SCAN_TIMEOUT_MS = 15_000;
 const PRIVATE_LIBRARY_AUTH_CACHE_TTL_SECONDS = 6 * 60 * 60;
+const PRIVATE_LIBRARY_HYDRATE_CACHE_TTL_SECONDS = 6 * 60 * 60;
 const XIAOYA_AUTH_CACHE_TTL_SECONDS = 48 * 60 * 60;
 const PRIVATE_LIBRARY_CLIENT_NAME = 'DecoTV';
 const PRIVATE_LIBRARY_CLIENT_DEVICE = 'DecoTV Web';
@@ -1055,9 +1056,29 @@ function inferAnime(
   return originalLanguage === 'ja' || countries.includes('JP');
 }
 
+function getHydratedPrivateLibraryItemCacheKey(
+  item: PrivateLibraryItem,
+): string {
+  return [
+    'private-library:hydrate',
+    item.connectorId,
+    item.sourceItemId,
+    item.tmdbId || 'none',
+    item.mediaType,
+    item.year || 'none',
+    item.scannedAt,
+  ].join(':');
+}
+
 export async function hydratePrivateLibraryItem(
   item: PrivateLibraryItem,
 ): Promise<PrivateLibraryItem> {
+  const cacheKey = getHydratedPrivateLibraryItemCacheKey(item);
+  const cached = getServerCache<PrivateLibraryItem>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   if (!(await isTmdbEnabled())) {
     return item;
   }
@@ -1076,6 +1097,7 @@ export async function hydratePrivateLibraryItem(
     );
 
     if (!candidate) {
+      setServerCache(cacheKey, item, PRIVATE_LIBRARY_HYDRATE_CACHE_TTL_SECONDS);
       return item;
     }
 
@@ -1084,6 +1106,7 @@ export async function hydratePrivateLibraryItem(
   }
 
   if (!effectiveTmdbId) {
+    setServerCache(cacheKey, item, PRIVATE_LIBRARY_HYDRATE_CACHE_TTL_SECONDS);
     return item;
   }
 
@@ -1094,7 +1117,7 @@ export async function hydratePrivateLibraryItem(
       .filter(Boolean);
     const year = item.year || extractYearFromDate(detail.release_date);
 
-    return {
+    const hydratedItem: PrivateLibraryItem = {
       ...item,
       tmdbId: effectiveTmdbId,
       mediaType: 'movie',
@@ -1115,6 +1138,12 @@ export async function hydratePrivateLibraryItem(
         ),
       ),
     };
+    setServerCache(
+      cacheKey,
+      hydratedItem,
+      PRIVATE_LIBRARY_HYDRATE_CACHE_TTL_SECONDS,
+    );
+    return hydratedItem;
   }
 
   const detail = await tmdbGetTvDetail(effectiveTmdbId);
@@ -1126,7 +1155,7 @@ export async function hydratePrivateLibraryItem(
       ? detail.episode_run_time[0]
       : item.runtimeMinutes;
 
-  return {
+  const hydratedItem: PrivateLibraryItem = {
     ...item,
     tmdbId: effectiveTmdbId,
     mediaType: 'tv',
@@ -1147,6 +1176,12 @@ export async function hydratePrivateLibraryItem(
       detail.origin_country || [],
     ),
   };
+  setServerCache(
+    cacheKey,
+    hydratedItem,
+    PRIVATE_LIBRARY_HYDRATE_CACHE_TTL_SECONDS,
+  );
+  return hydratedItem;
 }
 
 async function scanOpenList(
