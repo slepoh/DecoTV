@@ -48,7 +48,11 @@ import { useRouter } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { AdminConfig, DanmuCustomNode } from '@/lib/admin.types';
+import {
+  AdminConfig,
+  DanmuCustomNode,
+  PrivateLibraryConnector,
+} from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { DEFAULT_PANSOU_SERVER_URL } from '@/lib/pansou';
 
@@ -136,6 +140,9 @@ interface AlertModalProps {
   message?: string;
   timer?: number;
   showConfirm?: boolean;
+  onConfirm?: () => void;
+  confirmText?: string;
+  cancelText?: string;
 }
 
 const AlertModal = ({
@@ -146,6 +153,9 @@ const AlertModal = ({
   message,
   timer,
   showConfirm = false,
+  onConfirm,
+  confirmText = '确定',
+  cancelText = '取消',
 }: AlertModalProps) => {
   const [isVisible, setIsVisible] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -222,14 +232,34 @@ const AlertModal = ({
             <p className='text-gray-600 dark:text-gray-400 mb-4'>{message}</p>
           )}
 
-          {showConfirm && (
-            <button
-              onClick={onClose}
-              className={`px-4 py-2 text-sm font-medium ${buttonStyles.primary}`}
-            >
-              确定
-            </button>
-          )}
+          {showConfirm ? (
+            onConfirm ? (
+              <div className='flex items-center justify-center gap-3'>
+                <button
+                  onClick={onClose}
+                  className={`px-4 py-2 text-sm font-medium ${buttonStyles.secondary}`}
+                >
+                  {cancelText}
+                </button>
+                <button
+                  onClick={() => {
+                    onConfirm();
+                    onClose();
+                  }}
+                  className={`px-4 py-2 text-sm font-medium ${buttonStyles.primary}`}
+                >
+                  {confirmText}
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={onClose}
+                className={`px-4 py-2 text-sm font-medium ${buttonStyles.primary}`}
+              >
+                {confirmText}
+              </button>
+            )
+          ) : null}
         </div>
       </div>
     </div>,
@@ -246,6 +276,9 @@ const useAlertModal = () => {
     message?: string;
     timer?: number;
     showConfirm?: boolean;
+    onConfirm?: () => void;
+    confirmText?: string;
+    cancelText?: string;
   }>({
     isOpen: false,
     type: 'success',
@@ -320,6 +353,10 @@ interface SiteConfig {
   DoubanProxy: string;
   DoubanImageProxyType: string;
   DoubanImageProxy: string;
+  TmdbApiKey: string;
+  TmdbProxyType: 'direct' | 'forward' | 'reverse';
+  TmdbProxy: string;
+  TmdbReverseProxy: string;
   DisableYellowFilter: boolean;
   FluidSearch: boolean;
   // 登录页面背景图
@@ -2529,6 +2566,9 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
         message={alertModal.message}
         timer={alertModal.timer}
         showConfirm={alertModal.showConfirm}
+        onConfirm={alertModal.onConfirm}
+        confirmText={alertModal.confirmText}
+        cancelText={alertModal.cancelText}
       />
     </div>
   );
@@ -5092,6 +5132,10 @@ const SiteConfigComponent = ({
     DoubanProxy: '',
     DoubanImageProxyType: 'cmliussss-cdn-tencent',
     DoubanImageProxy: '',
+    TmdbApiKey: '',
+    TmdbProxyType: 'direct',
+    TmdbProxy: '',
+    TmdbReverseProxy: '',
     DisableYellowFilter: false,
     FluidSearch: true,
     LoginBackground: 'https://pan.yyds.nyc.mn/background.png',
@@ -5156,6 +5200,10 @@ const SiteConfigComponent = ({
         DoubanImageProxyType:
           config.SiteConfig.DoubanImageProxyType || 'cmliussss-cdn-tencent',
         DoubanImageProxy: config.SiteConfig.DoubanImageProxy || '',
+        TmdbApiKey: config.TMDBConfig?.ApiKey || '',
+        TmdbProxyType: config.SiteConfig.TmdbProxyType || 'direct',
+        TmdbProxy: config.SiteConfig.TmdbProxy || '',
+        TmdbReverseProxy: config.SiteConfig.TmdbReverseProxy || '',
         DisableYellowFilter: config.SiteConfig.DisableYellowFilter || false,
         FluidSearch: config.SiteConfig.FluidSearch ?? true,
         LoginBackground:
@@ -5498,6 +5546,115 @@ const SiteConfigComponent = ({
             </p>
           </div>
         )}
+      </div>
+
+      {/* TMDB 代理设置 */}
+      <div className='space-y-3 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40'>
+        <div>
+          <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+            TMDB API Key
+          </label>
+          <input
+            type='password'
+            placeholder='输入 TMDB v3 API Key'
+            value={siteSettings.TmdbApiKey}
+            onChange={(e) =>
+              setSiteSettings((prev) => ({
+                ...prev,
+                TmdbApiKey: e.target.value,
+              }))
+            }
+            className='w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+          />
+        </div>
+
+        <div>
+          <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+            TMDB 代理模式
+          </label>
+          <select
+            value={siteSettings.TmdbProxyType}
+            onChange={(e) =>
+              setSiteSettings((prev) => ({
+                ...prev,
+                TmdbProxyType: e.target.value as
+                  | 'direct'
+                  | 'forward'
+                  | 'reverse',
+              }))
+            }
+            className='w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+          >
+            <option value='direct'>直连</option>
+            <option value='forward'>正向代理</option>
+            <option value='reverse'>反向代理</option>
+          </select>
+        </div>
+
+        {siteSettings.TmdbProxyType === 'forward' && (
+          <div>
+            <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+              TMDB 正向代理地址
+            </label>
+            <input
+              type='text'
+              placeholder='例如: https://proxy.example.com/fetch?url='
+              value={siteSettings.TmdbProxy}
+              onChange={(e) =>
+                setSiteSettings((prev) => ({
+                  ...prev,
+                  TmdbProxy: e.target.value,
+                }))
+              }
+              className='w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+            />
+          </div>
+        )}
+
+        {siteSettings.TmdbProxyType === 'reverse' && (
+          <div>
+            <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+              TMDB 反向代理地址
+            </label>
+            <input
+              type='text'
+              placeholder='例如: https://tmdb.your-domain.com'
+              value={siteSettings.TmdbReverseProxy}
+              onChange={(e) =>
+                setSiteSettings((prev) => ({
+                  ...prev,
+                  TmdbReverseProxy: e.target.value,
+                }))
+              }
+              className='w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+            />
+          </div>
+        )}
+
+        <button
+          type='button'
+          onClick={() =>
+            withLoading('testTmdb', async () => {
+              const resp = await fetch('/api/admin/tmdb/test', {
+                cache: 'no-store',
+              });
+              const data = await resp.json().catch(() => ({}));
+              if (!resp.ok) {
+                throw new Error(data.error || 'TMDB 连通性测试失败');
+              }
+              showSuccess('TMDB 连通性测试通过', showAlert);
+            }).catch((err) => {
+              showError(
+                err instanceof Error ? err.message : 'TMDB 连通性测试失败',
+                showAlert,
+              );
+            })
+          }
+          disabled={isLoading('testTmdb')}
+          className='inline-flex items-center px-3 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60'
+        >
+          {isLoading('testTmdb') ? '测试中...' : '测试 TMDB 连通性'}
+        </button>
       </div>
 
       {/* 搜索接口可拉取最大页数 */}
@@ -8298,6 +8455,535 @@ const PanSouConfigComponent = ({
   );
 };
 
+interface PrivateLibraryConfigPanelProps {
+  config: AdminConfig | null;
+  refreshConfig: () => Promise<void>;
+}
+
+const createEmptyConnector = (): PrivateLibraryConnector => ({
+  id: `pl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+  name: '新连接',
+  type: 'emby',
+  enabled: true,
+  serverUrl: '',
+  token: '',
+  username: '',
+  password: '',
+  rootPath: '/Media',
+  userId: '',
+  libraryFilter: [],
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+});
+
+interface PrivateLibraryScanStatus {
+  ok: boolean;
+  count: number;
+  error?: string;
+}
+
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function validatePrivateConnector(
+  connector: PrivateLibraryConnector,
+): string | null {
+  const name = connector.name.trim() || '未命名连接';
+  const serverUrl = connector.serverUrl.trim();
+  const token = connector.token.trim();
+
+  if (!serverUrl) {
+    return `${name}：服务器地址不能为空`;
+  }
+
+  if (!isValidHttpUrl(serverUrl)) {
+    return `${name}：服务器地址格式不正确`;
+  }
+
+  if (connector.type === 'openlist') {
+    if (!token) {
+      return `${name}：OpenList Token 不能为空`;
+    }
+    return null;
+  }
+
+  if (!token) {
+    return `${name}：API Key 不能为空`;
+  }
+
+  return null;
+}
+
+const PrivateLibraryConfigPanel = ({
+  config,
+  refreshConfig,
+}: PrivateLibraryConfigPanelProps) => {
+  const { alertModal, showAlert, hideAlert } = useAlertModal();
+  const { isLoading, withLoading } = useLoadingState();
+
+  const [connectors, setConnectors] = useState<PrivateLibraryConnector[]>([]);
+  const [scanResult, setScanResult] = useState<
+    Record<string, PrivateLibraryScanStatus>
+  >({});
+
+  useEffect(() => {
+    setConnectors(config?.PrivateLibraryConfig?.connectors || []);
+  }, [config?.PrivateLibraryConfig?.connectors]);
+
+  const patchConnector = (
+    connectorId: string,
+    patch: Partial<PrivateLibraryConnector>,
+  ) => {
+    setConnectors((prev) =>
+      prev.map((item) =>
+        item.id === connectorId
+          ? {
+              ...item,
+              ...patch,
+              updatedAt: Date.now(),
+            }
+          : item,
+      ),
+    );
+  };
+
+  const handleAddConnector = () => {
+    if (connectors.length >= 3) {
+      showError('最多仅支持 3 个私人影库连接', showAlert);
+      return;
+    }
+    setConnectors((prev) => [...prev, createEmptyConnector()]);
+  };
+
+  const handleDeleteConnector = (connectorId: string) => {
+    const target = connectors.find((item) => item.id === connectorId);
+    showAlert({
+      type: 'warning',
+      title: '删除连接',
+      message: `确定删除“${target?.name || '该连接'}”吗？此操作只会移除当前配置。`,
+      showConfirm: true,
+      confirmText: '删除',
+      cancelText: '取消',
+      onConfirm: () => {
+        setConnectors((prev) => prev.filter((item) => item.id !== connectorId));
+        setScanResult((prev) => {
+          const next = { ...prev };
+          delete next[connectorId];
+          return next;
+        });
+      },
+    });
+  };
+
+  const handleSave = async () => {
+    const validationError = connectors
+      .filter((connector) => connector.enabled)
+      .map((connector) => validatePrivateConnector(connector))
+      .find(Boolean);
+
+    if (validationError) {
+      showError(validationError, showAlert);
+      return;
+    }
+
+    await withLoading('savePrivateLibraryConfig', async () => {
+      try {
+        const response = await fetch('/api/admin/private-library', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectors }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || '保存失败');
+        }
+        await refreshConfig();
+        showSuccess('私人影库配置保存成功', showAlert);
+      } catch (error) {
+        showError(
+          `保存私人影库配置失败：${error instanceof Error ? error.message : '未知错误'}`,
+          showAlert,
+        );
+      }
+    });
+  };
+
+  const handleTest = async (connector: PrivateLibraryConnector) => {
+    const validationError = validatePrivateConnector(connector);
+    if (validationError) {
+      showError(validationError, showAlert);
+      return;
+    }
+
+    await withLoading(`testPrivateConnector:${connector.id}`, async () => {
+      try {
+        const response = await fetch('/api/admin/private-library/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connector }),
+        });
+        const data = (await response.json().catch(() => ({}))) as {
+          ok?: boolean;
+          detail?: string;
+          error?: string;
+        };
+        if (!response.ok || !data.ok) {
+          throw new Error(data.detail || data.error || '连接测试失败');
+        }
+        showSuccess(`${connector.name} 连接测试通过`, showAlert);
+      } catch (error) {
+        showError(
+          `${connector.name} 测试失败：${error instanceof Error ? error.message : '未知错误'}`,
+          showAlert,
+        );
+      }
+    });
+  };
+
+  const handleScan = async (connectorId?: string) => {
+    await withLoading(
+      connectorId
+        ? `scanPrivateConnector:${connectorId}`
+        : 'scanPrivateConnector:all',
+      async () => {
+        try {
+          const response = await fetch('/api/admin/private-library/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(connectorId ? { connectorId } : {}),
+          });
+          const data = (await response.json().catch(() => ({}))) as {
+            ok?: boolean;
+            result?: Record<string, PrivateLibraryScanStatus>;
+            error?: string;
+          };
+          if (!response.ok || !data.ok || !data.result) {
+            throw new Error(data.error || '扫描失败');
+          }
+
+          setScanResult((prev) => ({ ...prev, ...data.result }));
+
+          const entries = Object.entries(data.result);
+          const failed = entries.filter(([, item]) => !item.ok);
+          const success = entries.filter(([, item]) => item.ok);
+
+          if (connectorId) {
+            const result = data.result[connectorId];
+            const name =
+              connectors.find((item) => item.id === connectorId)?.name ||
+              '当前连接';
+            if (result?.ok) {
+              showSuccess(
+                `${name} 扫描完成，发现 ${result.count} 个媒体文件`,
+                showAlert,
+              );
+            } else {
+              throw new Error(result?.error || '扫描失败');
+            }
+            return;
+          }
+
+          if (failed.length === 0) {
+            showSuccess('全部连接扫描完成，资源数量已更新', showAlert);
+            return;
+          }
+
+          if (success.length > 0) {
+            showAlert({
+              type: 'warning',
+              title: '扫描部分完成',
+              message: `成功 ${success.length} 个，失败 ${failed.length} 个。`,
+              showConfirm: true,
+            });
+            return;
+          }
+
+          throw new Error(
+            failed
+              .map(([id, item]) => {
+                const name =
+                  connectors.find((connector) => connector.id === id)?.name ||
+                  id;
+                return `${name}：${item.error || '扫描失败'}`;
+              })
+              .join('；'),
+          );
+        } catch (error) {
+          showError(
+            `扫描失败：${error instanceof Error ? error.message : '未知错误'}`,
+            showAlert,
+          );
+        }
+      },
+    );
+  };
+
+  return (
+    <div className='space-y-6'>
+      <div className='rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50 dark:bg-blue-900/10 p-4 flex items-center justify-between gap-3'>
+        <div>
+          <p className='text-sm font-semibold text-blue-900 dark:text-blue-200'>
+            私人影库连接
+          </p>
+          <p className='text-xs text-blue-700 dark:text-blue-300 mt-1'>
+            支持 OpenList / Emby / Jellyfin，最多 3 个连接
+          </p>
+        </div>
+        <div className='flex items-center gap-2'>
+          <button
+            type='button'
+            onClick={handleAddConnector}
+            disabled={connectors.length >= 3}
+            className={
+              connectors.length >= 3
+                ? buttonStyles.disabledSmall
+                : buttonStyles.primarySmall
+            }
+          >
+            新增连接
+          </button>
+          <button
+            type='button'
+            onClick={() => handleScan()}
+            disabled={
+              isLoading('scanPrivateConnector:all') || connectors.length === 0
+            }
+            className={
+              isLoading('scanPrivateConnector:all') || connectors.length === 0
+                ? buttonStyles.disabledSmall
+                : buttonStyles.successSmall
+            }
+          >
+            全量扫描
+          </button>
+        </div>
+      </div>
+
+      {connectors.length === 0 && (
+        <div className='rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-6 text-center text-sm text-gray-500 dark:text-gray-400'>
+          暂无连接，点击“新增连接”开始配置
+        </div>
+      )}
+
+      {connectors.map((connector, index) => (
+        <div
+          key={connector.id}
+          className='bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden'
+        >
+          <div className='p-4 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50 flex items-center justify-between'>
+            <h4 className='text-sm font-semibold text-gray-900 dark:text-gray-100'>
+              连接 {index + 1}
+            </h4>
+            <div className='flex items-center gap-2'>
+              <button
+                type='button'
+                onClick={() => handleTest(connector)}
+                disabled={isLoading(`testPrivateConnector:${connector.id}`)}
+                className={
+                  isLoading(`testPrivateConnector:${connector.id}`)
+                    ? buttonStyles.disabledSmall
+                    : buttonStyles.secondarySmall
+                }
+              >
+                连通性测试
+              </button>
+              <button
+                type='button'
+                onClick={() => handleScan(connector.id)}
+                disabled={isLoading(`scanPrivateConnector:${connector.id}`)}
+                className={
+                  isLoading(`scanPrivateConnector:${connector.id}`)
+                    ? buttonStyles.disabledSmall
+                    : buttonStyles.successSmall
+                }
+              >
+                扫描
+              </button>
+              <button
+                type='button'
+                onClick={() => handleDeleteConnector(connector.id)}
+                className={buttonStyles.dangerSmall}
+              >
+                删除
+              </button>
+            </div>
+          </div>
+
+          <div className='p-4 grid grid-cols-1 md:grid-cols-2 gap-3'>
+            <input
+              type='text'
+              value={connector.name}
+              onChange={(event) =>
+                patchConnector(connector.id, { name: event.target.value })
+              }
+              placeholder='连接名称'
+              className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+            />
+
+            <select
+              value={connector.type}
+              onChange={(event) =>
+                patchConnector(connector.id, {
+                  type: event.target.value as PrivateLibraryConnector['type'],
+                })
+              }
+              className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+            >
+              <option value='openlist'>OpenList</option>
+              <option value='emby'>Emby</option>
+              <option value='jellyfin'>Jellyfin</option>
+            </select>
+
+            <input
+              type='text'
+              value={connector.serverUrl}
+              onChange={(event) =>
+                patchConnector(connector.id, { serverUrl: event.target.value })
+              }
+              placeholder='服务地址，例如 https://emby.example.com'
+              className='md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+            />
+
+            <input
+              type='text'
+              value={connector.token}
+              onChange={(event) =>
+                patchConnector(connector.id, { token: event.target.value })
+              }
+              placeholder='Token / API Key'
+              className='md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm font-mono'
+            />
+
+            <input
+              type='text'
+              value={connector.username || ''}
+              onChange={(event) =>
+                patchConnector(connector.id, { username: event.target.value })
+              }
+              placeholder='用户名（选填）'
+              className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+            />
+            <input
+              type='password'
+              value={connector.password || ''}
+              onChange={(event) =>
+                patchConnector(connector.id, { password: event.target.value })
+              }
+              placeholder='密码（选填）'
+              className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+            />
+
+            {connector.type === 'openlist' ? (
+              <input
+                type='text'
+                value={connector.rootPath || ''}
+                onChange={(event) =>
+                  patchConnector(connector.id, {
+                    rootPath: event.target.value || '/Media',
+                  })
+                }
+                placeholder='OpenList 根目录，例如 /Media'
+                className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm md:col-span-2'
+              />
+            ) : (
+              <>
+                <input
+                  type='text'
+                  value={connector.userId || ''}
+                  onChange={(event) =>
+                    patchConnector(connector.id, { userId: event.target.value })
+                  }
+                  placeholder='Emby/Jellyfin UserId（可选，用于已播放回写）'
+                  className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+                />
+                <input
+                  type='text'
+                  value={(connector.libraryFilter || []).join(', ')}
+                  onChange={(event) =>
+                    patchConnector(connector.id, {
+                      libraryFilter: event.target.value
+                        .split(',')
+                        .map((item) => item.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                  placeholder='媒体库过滤（可选，逗号分隔）'
+                  className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+                />
+              </>
+            )}
+
+            <label className='md:col-span-2 inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300'>
+              <input
+                type='checkbox'
+                checked={connector.enabled}
+                onChange={(event) =>
+                  patchConnector(connector.id, {
+                    enabled: event.target.checked,
+                  })
+                }
+                className='rounded border-gray-300 text-blue-600 focus:ring-blue-500'
+              />
+              启用该连接
+            </label>
+
+            <div className='md:col-span-2 text-xs text-gray-500 dark:text-gray-400'>
+              {scanResult[connector.id] ? (
+                scanResult[connector.id]?.ok ? (
+                  <span>
+                    最近扫描结果：已扫描到{' '}
+                    {scanResult[connector.id]?.count ?? 0} 个媒体文件
+                  </span>
+                ) : (
+                  <span className='text-red-500 dark:text-red-400'>
+                    最近扫描结果：
+                    {scanResult[connector.id]?.error || '扫描失败'}
+                  </span>
+                )
+              ) : (
+                <span>尚未执行扫描</span>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <div className='flex justify-end'>
+        <button
+          type='button'
+          onClick={handleSave}
+          disabled={isLoading('savePrivateLibraryConfig')}
+          className={
+            isLoading('savePrivateLibraryConfig')
+              ? buttonStyles.disabled
+              : buttonStyles.success
+          }
+        >
+          {isLoading('savePrivateLibraryConfig')
+            ? '保存中...'
+            : '保存私人影库配置'}
+        </button>
+      </div>
+
+      <AlertModal
+        isOpen={alertModal.isOpen}
+        onClose={hideAlert}
+        type={alertModal.type}
+        title={alertModal.title}
+        message={alertModal.message}
+        timer={alertModal.timer}
+        showConfirm={alertModal.showConfirm}
+      />
+    </div>
+  );
+};
+
 function AdminPageClient() {
   const router = useRouter();
   const { alertModal, showAlert, hideAlert } = useAlertModal();
@@ -8318,6 +9004,7 @@ function AdminPageClient() {
     configFile: false,
     danmuConfig: false,
     pansouConfig: false,
+    privateLibraryConfig: false,
     dataMigration: false,
   });
 
@@ -9389,6 +10076,20 @@ function AdminPageClient() {
               onToggle={() => toggleTab('pansouConfig')}
             >
               <PanSouConfigPanel
+                config={config}
+                refreshConfig={refreshConfigAfterMutation}
+              />
+            </CollapsibleTab>
+
+            <CollapsibleTab
+              title='私人影库配置'
+              icon={
+                <Video size={20} className='text-gray-600 dark:text-gray-400' />
+              }
+              isExpanded={expandedTabs.privateLibraryConfig}
+              onToggle={() => toggleTab('privateLibraryConfig')}
+            >
+              <PrivateLibraryConfigPanel
                 config={config}
                 refreshConfig={refreshConfigAfterMutation}
               />

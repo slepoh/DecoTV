@@ -9,7 +9,7 @@ import Hls from 'hls.js';
 import { Download, Heart } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -337,11 +337,14 @@ function PlayPageClient() {
   const [videoYear, setVideoYear] = useState(searchParams.get('year') || '');
   const [videoCover, setVideoCover] = useState('');
   const [videoDoubanId, setVideoDoubanId] = useState(0);
+  const [videoTmdbId, setVideoTmdbId] = useState(0);
   // 当前源和ID
   const [currentSource, setCurrentSource] = useState(
     searchParams.get('source') || '',
   );
   const [currentId, setCurrentId] = useState(searchParams.get('id') || '');
+  const initialPrivateConnectorId = searchParams.get('connectorId') || '';
+  const initialPrivateSourceItemId = searchParams.get('sourceItemId') || '';
 
   // 搜索所需信息
   const [searchTitle] = useState(searchParams.get('stitle') || '');
@@ -364,6 +367,7 @@ function PlayPageClient() {
   const videoYearRef = useRef(videoYear);
   const detailRef = useRef<SearchResult | null>(detail);
   const currentEpisodeIndexRef = useRef(currentEpisodeIndex);
+  const privateProgressSyncRef = useRef<number>(0);
 
   // 同步最新值到 refs
   useEffect(() => {
@@ -454,6 +458,33 @@ function PlayPageClient() {
     type: 'success' | 'error' | 'info' = 'info',
   ) => {
     setToast({ show: true, message, type });
+  };
+
+  const isPrivateLibrarySource = (source: string) =>
+    source === 'private_library';
+
+  const getPlayRecordStorageSource = (source: string, id: string) => {
+    if (!isPrivateLibrarySource(source)) {
+      return source;
+    }
+
+    const connectorId = id.split(':')[0] || 'private-library';
+    return `private-progress:${connectorId}`;
+  };
+
+  const getPrivatePlaybackIdentity = () => {
+    const detailValue = detailRef.current;
+    const connectorId =
+      detailValue?.connector_id ||
+      initialPrivateConnectorId ||
+      currentIdRef.current.split(':')[0];
+    const sourceItemId =
+      detailValue?.source_item_id || initialPrivateSourceItemId;
+
+    return {
+      connectorId,
+      sourceItemId,
+    };
   };
 
   // 换源加载状态
@@ -1726,6 +1757,7 @@ function PlayPageClient() {
       setVideoTitle(detailData.title || videoTitleRef.current);
       setVideoCover(detailData.poster);
       setVideoDoubanId(detailData.douban_id || 0);
+      setVideoTmdbId(detailData.tmdb_id || 0);
       setDetail(detailData);
       if (currentEpisodeIndex >= detailData.episodes.length) {
         setCurrentEpisodeIndex(0);
@@ -1760,7 +1792,11 @@ function PlayPageClient() {
 
       try {
         const allRecords = await getAllPlayRecords();
-        const key = generateStorageKey(currentSource, currentId);
+        const storageSource = getPlayRecordStorageSource(
+          currentSource,
+          currentId,
+        );
+        const key = generateStorageKey(storageSource, currentId);
         const record = allRecords[key];
 
         if (record) {
@@ -1833,10 +1869,11 @@ function PlayPageClient() {
       // 清除前一个历史记录
       if (currentSourceRef.current && currentIdRef.current) {
         try {
-          await deletePlayRecord(
+          const previousStorageSource = getPlayRecordStorageSource(
             currentSourceRef.current,
             currentIdRef.current,
           );
+          await deletePlayRecord(previousStorageSource, currentIdRef.current);
           console.log('已清除前一个播放记录');
         } catch (err) {
           console.error('清除播放记录失败:', err);
@@ -1893,6 +1930,7 @@ function PlayPageClient() {
       setVideoYear(newDetail.year);
       setVideoCover(newDetail.poster);
       setVideoDoubanId(newDetail.douban_id || 0);
+      setVideoTmdbId(newDetail.tmdb_id || 0);
       setCurrentSource(newSource);
       setCurrentId(newId);
       setDetail(newDetail);
@@ -2062,7 +2100,12 @@ function PlayPageClient() {
     }
 
     try {
-      await savePlayRecord(currentSourceRef.current, currentIdRef.current, {
+      const storageSource = getPlayRecordStorageSource(
+        currentSourceRef.current,
+        currentIdRef.current,
+      );
+
+      await savePlayRecord(storageSource, currentIdRef.current, {
         title: videoTitleRef.current,
         source_name: detailRef.current?.source_name || '',
         year: detailRef.current?.year,
@@ -2087,10 +2130,57 @@ function PlayPageClient() {
     }
   };
 
+  const reportPrivateLibraryProgress = async (
+    event: 'progress' | 'stopped' | 'played' = 'progress',
+    force = false,
+  ) => {
+    if (
+      !isPrivateLibrarySource(currentSourceRef.current) ||
+      !artPlayerRef.current
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    if (!force && now - privateProgressSyncRef.current < 30_000) {
+      return;
+    }
+
+    const { connectorId, sourceItemId } = getPrivatePlaybackIdentity();
+    if (!connectorId || !sourceItemId) {
+      return;
+    }
+
+    const currentTime = Math.max(0, artPlayerRef.current.currentTime || 0);
+    const duration = Math.max(0, artPlayerRef.current.duration || 0);
+
+    const payload = {
+      connectorId,
+      sourceItemId,
+      event,
+      positionTicks: Math.floor(currentTime * 10_000_000),
+      runtimeTicks: Math.floor(duration * 10_000_000),
+      paused: Boolean(artPlayerRef.current.paused),
+    };
+
+    try {
+      await fetch('/api/private-library/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: event !== 'progress',
+      });
+      privateProgressSyncRef.current = now;
+    } catch (error) {
+      console.warn('私人影库进度同步失败:', error);
+    }
+  };
+
   useEffect(() => {
     // 页面即将卸载时保存播放进度和清理资源
     const handleBeforeUnload = () => {
       saveCurrentPlayProgress();
+      reportPrivateLibraryProgress('stopped', true);
       releaseWakeLock();
       cleanupPlayer();
     };
@@ -2099,6 +2189,7 @@ function PlayPageClient() {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         saveCurrentPlayProgress();
+        reportPrivateLibraryProgress('stopped', true);
         releaseWakeLock();
       } else if (document.visibilityState === 'visible') {
         // 页面重新可见时，如果正在播放则重新请求 Wake Lock
@@ -2628,10 +2719,12 @@ function PlayPageClient() {
       artPlayerRef.current.on('pause', () => {
         releaseWakeLock();
         saveCurrentPlayProgress();
+        reportPrivateLibraryProgress('progress', true);
       });
 
       artPlayerRef.current.on('video:ended', () => {
         releaseWakeLock();
+        reportPrivateLibraryProgress('played', true);
       });
 
       // 如果播放器初始化时已经在播放状态，则请求 Wake Lock
@@ -2775,6 +2868,7 @@ function PlayPageClient() {
           saveCurrentPlayProgress();
           lastSaveTimeRef.current = now;
         }
+        reportPrivateLibraryProgress('progress');
       });
 
       artPlayerRef.current.on('pause', () => {
@@ -3503,8 +3597,10 @@ function PlayPageClient() {
         {/* 豆瓣富媒体信息区域 */}
         <DoubanInfoSection
           doubanId={videoDoubanId}
+          tmdbId={videoTmdbId}
           title={videoTitle}
           year={videoYear}
+          fallbackOverview={detail?.desc}
         />
 
         {isDanmuManualModalOpen && (
@@ -3546,17 +3642,32 @@ function PlayPageClient() {
 }
 
 // 豆瓣富媒体信息区域组件
-const DoubanInfoSection = ({
+const LegacyDoubanInfoSection = ({
   doubanId: initialDoubanId,
+  tmdbId: initialTmdbId,
   title,
   year,
+  fallbackOverview,
 }: {
   doubanId: number;
+  tmdbId: number;
   title: string;
   year: string;
+  fallbackOverview?: string;
 }) => {
   const [resolvedDoubanId, setResolvedDoubanId] = useState(initialDoubanId);
   const [isSearching, setIsSearching] = useState(false);
+  const [resolvedTmdbId, setResolvedTmdbId] = useState(initialTmdbId);
+  const [tmdbType, setTmdbType] = useState<'movie' | 'tv'>('movie');
+  const [tmdbEnabled, setTmdbEnabled] = useState(false);
+  const [tmdbLoading, setTmdbLoading] = useState(false);
+  const [tmdbDetail, setTmdbDetail] = useState<{
+    overview?: string;
+    genres?: string[];
+    countries?: string[];
+    year?: string;
+    durations?: string[];
+  } | null>(null);
 
   useEffect(() => {
     const normalizedTitle = title.toLowerCase().trim();
@@ -3632,6 +3743,177 @@ const DoubanInfoSection = ({
     searchDoubanId();
   }, [initialDoubanId, title, year]);
 
+  useEffect(() => {
+    const normalizedTitle = title.toLowerCase().trim();
+    const tmdbIdCacheKey = generateCacheKey('tmdb-resolved-id', {
+      title: normalizedTitle,
+      year: year || '',
+    });
+
+    if (!title) {
+      setResolvedTmdbId(initialTmdbId > 0 ? initialTmdbId : 0);
+      return;
+    }
+
+    if (initialTmdbId > 0) {
+      setResolvedTmdbId(initialTmdbId);
+      globalCache.set(
+        tmdbIdCacheKey,
+        { id: initialTmdbId, type: tmdbType },
+        7 * 24 * 60 * 60,
+      );
+      return;
+    }
+
+    const cached = globalCache.get<{ id: number; type: 'movie' | 'tv' }>(
+      tmdbIdCacheKey,
+    );
+    if (cached?.id) {
+      setResolvedTmdbId(cached.id);
+      setTmdbType(cached.type);
+      setTmdbEnabled(true);
+      return;
+    }
+
+    const searchTmdb = async () => {
+      try {
+        const query = encodeURIComponent(title);
+        const response = await fetch(
+          `/api/tmdb?action=search&type=multi&query=${query}`,
+        );
+
+        if (!response.ok) {
+          if (response.status === 400) {
+            setTmdbEnabled(false);
+            return;
+          }
+          return;
+        }
+
+        setTmdbEnabled(true);
+        const payload = (await response.json()) as {
+          results?: Array<{
+            id: number;
+            media_type?: 'movie' | 'tv' | 'person';
+            title?: string;
+            name?: string;
+            release_date?: string;
+            first_air_date?: string;
+          }>;
+        };
+
+        const list = (payload.results || []).filter(
+          (item) => item.media_type === 'movie' || item.media_type === 'tv',
+        ) as Array<{
+          id: number;
+          media_type: 'movie' | 'tv';
+          title?: string;
+          name?: string;
+          release_date?: string;
+          first_air_date?: string;
+        }>;
+
+        if (list.length === 0) {
+          return;
+        }
+
+        const target =
+          list.find((item) => {
+            const itemTitle = (item.title || item.name || '')
+              .toLowerCase()
+              .trim();
+            const itemYear = (
+              item.release_date ||
+              item.first_air_date ||
+              ''
+            ).slice(0, 4);
+            const titleMatched =
+              itemTitle === normalizedTitle ||
+              itemTitle.includes(normalizedTitle) ||
+              normalizedTitle.includes(itemTitle);
+            const yearMatched = !year || !itemYear || itemYear === year;
+            return titleMatched && yearMatched;
+          }) || list[0];
+
+        setResolvedTmdbId(target.id);
+        setTmdbType(target.media_type);
+        globalCache.set(
+          tmdbIdCacheKey,
+          { id: target.id, type: target.media_type },
+          7 * 24 * 60 * 60,
+        );
+      } catch {
+        // TMDB 查询失败时静默回退
+      }
+    };
+
+    searchTmdb();
+  }, [initialTmdbId, title, year, tmdbType]);
+
+  useEffect(() => {
+    if (!resolvedTmdbId || resolvedTmdbId <= 0) {
+      setTmdbDetail(null);
+      return;
+    }
+
+    const fetchTmdbDetail = async () => {
+      setTmdbLoading(true);
+      try {
+        const response = await fetch(
+          `/api/tmdb?action=detail&type=${tmdbType}&id=${resolvedTmdbId}`,
+        );
+        if (!response.ok) {
+          setTmdbDetail(null);
+          return;
+        }
+
+        const data = (await response.json()) as {
+          overview?: string;
+          genres?: Array<{ name: string }>;
+          production_countries?: Array<{ name: string }>;
+          release_date?: string;
+          first_air_date?: string;
+          runtime?: number;
+          number_of_seasons?: number;
+          number_of_episodes?: number;
+        };
+
+        const durations: string[] = [];
+        if (typeof data.runtime === 'number' && data.runtime > 0) {
+          durations.push(`${data.runtime} 分钟`);
+        }
+        if (
+          typeof data.number_of_seasons === 'number' &&
+          data.number_of_seasons > 0
+        ) {
+          durations.push(`${data.number_of_seasons} 季`);
+        }
+        if (
+          typeof data.number_of_episodes === 'number' &&
+          data.number_of_episodes > 0
+        ) {
+          durations.push(`${data.number_of_episodes} 集`);
+        }
+
+        setTmdbDetail({
+          overview: data.overview,
+          genres: (data.genres || []).map((item) => item.name).filter(Boolean),
+          countries: (data.production_countries || [])
+            .map((item) => item.name)
+            .filter(Boolean),
+          year:
+            (data.release_date || data.first_air_date || '').slice(0, 4) ||
+            undefined,
+          durations,
+        });
+      } finally {
+        setTmdbLoading(false);
+      }
+    };
+
+    fetchTmdbDetail();
+  }, [resolvedTmdbId, tmdbType]);
+
   const {
     detail: doubanDetail,
     comments,
@@ -3642,7 +3924,34 @@ const DoubanInfoSection = ({
     commentsTotal,
   } = useDoubanInfo(resolvedDoubanId > 0 ? resolvedDoubanId : null);
 
-  if ((!resolvedDoubanId || resolvedDoubanId === 0) && !isSearching) {
+  const mergedDetail = useMemo(() => {
+    if (doubanDetail) {
+      return doubanDetail;
+    }
+
+    if (!tmdbDetail) {
+      return null;
+    }
+
+    return {
+      id: String(resolvedTmdbId || ''),
+      title,
+      year: tmdbDetail.year || year,
+      summary: fallbackOverview || tmdbDetail.overview || '',
+      genres: tmdbDetail.genres,
+      countries: tmdbDetail.countries,
+      durations: tmdbDetail.durations,
+      directors: [],
+      casts: [],
+    };
+  }, [doubanDetail, fallbackOverview, resolvedTmdbId, title, tmdbDetail, year]);
+
+  if (
+    !mergedDetail &&
+    !tmdbLoading &&
+    (!resolvedDoubanId || resolvedDoubanId === 0) &&
+    !isSearching
+  ) {
     if (!title) return null;
     return null;
   }
@@ -3650,29 +3959,435 @@ const DoubanInfoSection = ({
   return (
     <div className='mt-8 space-y-8 pb-8'>
       <MovieMetaInfo
-        detail={doubanDetail}
-        loading={detailLoading}
+        detail={mergedDetail}
+        loading={detailLoading || tmdbLoading}
         showCast={true}
         showSummary={true}
         showTags={true}
+        primarySummaryLabel='豆瓣简介'
+        secondarySummary={tmdbDetail?.overview || fallbackOverview}
+        secondarySummaryLabel='TMDB 简介'
       />
 
-      <MovieRecommends
-        recommends={recommends}
-        loading={recommendsLoading}
-        maxDisplay={10}
-      />
+      {resolvedDoubanId > 0 && (
+        <>
+          <MovieRecommends
+            recommends={recommends}
+            loading={recommendsLoading}
+            maxDisplay={10}
+          />
 
-      <MovieReviews
-        comments={comments}
-        loading={commentsLoading}
-        total={commentsTotal}
-        doubanId={resolvedDoubanId}
-        maxDisplay={6}
-      />
+          <MovieReviews
+            comments={comments}
+            loading={commentsLoading}
+            total={commentsTotal}
+            doubanId={resolvedDoubanId}
+            maxDisplay={6}
+          />
+        </>
+      )}
+
+      {tmdbEnabled && resolvedTmdbId > 0 && (
+        <p className='text-xs text-gray-500 dark:text-gray-400'>
+          已启用 TMDB 智能补全
+        </p>
+      )}
     </div>
   );
 };
+void LegacyDoubanInfoSection;
+
+function normalizeMetadataTitle(value: string): string {
+  return value
+    .replace(/[：:]/g, ' ')
+    .replace(/[（）()【】[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function extractMetadataYear(value?: string): string {
+  const match = (value || '').match(/\b(19|20)\d{2}\b/);
+  return match ? match[0] : '';
+}
+
+function isMetadataTitleMatch(source: string, target: string): boolean {
+  if (!source || !target) {
+    return false;
+  }
+
+  return (
+    source === target || source.includes(target) || target.includes(source)
+  );
+}
+
+const DoubanInfoSection = ({
+  doubanId: initialDoubanId,
+  tmdbId: initialTmdbId,
+  title,
+  year,
+  fallbackOverview,
+}: {
+  doubanId: number;
+  tmdbId: number;
+  title: string;
+  year: string;
+  fallbackOverview?: string;
+}) => {
+  const normalizedTitle = useMemo(() => normalizeMetadataTitle(title), [title]);
+  const normalizedYear = useMemo(() => extractMetadataYear(year), [year]);
+  const fallbackSummary = (fallbackOverview || '').trim();
+
+  const [resolvedDoubanId, setResolvedDoubanId] = useState(initialDoubanId);
+  const [, setIsSearching] = useState(false);
+  const [resolvedTmdbId, setResolvedTmdbId] = useState(initialTmdbId);
+  const [tmdbType, setTmdbType] = useState<'movie' | 'tv'>('movie');
+  const [tmdbEnabled, setTmdbEnabled] = useState(false);
+  const [tmdbLoading, setTmdbLoading] = useState(false);
+  const [tmdbDetail, setTmdbDetail] = useState<{
+    overview?: string;
+    genres?: string[];
+    countries?: string[];
+    year?: string;
+    durations?: string[];
+  } | null>(null);
+
+  useEffect(() => {
+    const doubanIdCacheKey = generateCacheKey('douban-resolved-id', {
+      title: normalizedTitle,
+      year: normalizedYear,
+    });
+
+    if (initialDoubanId > 0 || !normalizedTitle) {
+      setResolvedDoubanId(initialDoubanId);
+      if (initialDoubanId > 0 && normalizedTitle) {
+        globalCache.set(doubanIdCacheKey, initialDoubanId, 7 * 24 * 60 * 60);
+      }
+      return;
+    }
+
+    const cachedDoubanId = globalCache.get<number>(doubanIdCacheKey);
+    if (cachedDoubanId && cachedDoubanId > 0) {
+      setResolvedDoubanId(cachedDoubanId);
+      return;
+    }
+
+    const searchDoubanId = async () => {
+      setIsSearching(true);
+      try {
+        const response = await fetch(
+          `/api/douban/proxy?path=movie/search&q=${encodeURIComponent(title.trim())}&count=5`,
+        );
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as {
+          subjects?: Array<{ title: string; year?: string; id?: string }>;
+        };
+        const subjects = data.subjects || [];
+        const matchedSubject =
+          subjects.find((subject) => {
+            const subjectTitle = normalizeMetadataTitle(subject.title);
+            const subjectYear = extractMetadataYear(subject.year);
+            const titleMatch = isMetadataTitleMatch(
+              subjectTitle,
+              normalizedTitle,
+            );
+            const yearMatch =
+              !normalizedYear || !subjectYear || subjectYear === normalizedYear;
+            return titleMatch && yearMatch;
+          }) || subjects[0];
+
+        if (matchedSubject?.id) {
+          const foundId = parseInt(matchedSubject.id, 10);
+          if (Number.isFinite(foundId) && foundId > 0) {
+            setResolvedDoubanId(foundId);
+            globalCache.set(doubanIdCacheKey, foundId, 7 * 24 * 60 * 60);
+          }
+        }
+      } catch {
+        // 豆瓣搜索失败时静默降级。
+      } finally {
+        setIsSearching(false);
+      }
+    };
+
+    void searchDoubanId();
+  }, [initialDoubanId, normalizedTitle, normalizedYear, title]);
+
+  useEffect(() => {
+    const tmdbIdCacheKey = generateCacheKey('tmdb-resolved-id', {
+      title: normalizedTitle,
+      year: normalizedYear,
+    });
+
+    if (!normalizedTitle) {
+      setResolvedTmdbId(initialTmdbId > 0 ? initialTmdbId : 0);
+      return;
+    }
+
+    if (initialTmdbId > 0) {
+      setResolvedTmdbId(initialTmdbId);
+      setTmdbEnabled(true);
+      globalCache.set(
+        tmdbIdCacheKey,
+        { id: initialTmdbId, type: tmdbType },
+        7 * 24 * 60 * 60,
+      );
+      return;
+    }
+
+    const cached = globalCache.get<{ id: number; type: 'movie' | 'tv' }>(
+      tmdbIdCacheKey,
+    );
+    if (cached?.id) {
+      setResolvedTmdbId(cached.id);
+      setTmdbType(cached.type);
+      setTmdbEnabled(true);
+      return;
+    }
+
+    const searchTmdb = async () => {
+      try {
+        const response = await fetch(
+          `/api/tmdb?action=search&type=multi&query=${encodeURIComponent(title.trim())}`,
+        );
+
+        if (!response.ok) {
+          if (response.status === 400) {
+            setTmdbEnabled(false);
+          }
+          return;
+        }
+
+        setTmdbEnabled(true);
+        const payload = (await response.json()) as {
+          results?: Array<{
+            id: number;
+            media_type?: 'movie' | 'tv' | 'person';
+            title?: string;
+            name?: string;
+            release_date?: string;
+            first_air_date?: string;
+          }>;
+        };
+
+        const list = (payload.results || []).filter(
+          (item) => item.media_type === 'movie' || item.media_type === 'tv',
+        ) as Array<{
+          id: number;
+          media_type: 'movie' | 'tv';
+          title?: string;
+          name?: string;
+          release_date?: string;
+          first_air_date?: string;
+        }>;
+
+        if (list.length === 0) {
+          return;
+        }
+
+        const target =
+          list.find((item) => {
+            const itemTitle = normalizeMetadataTitle(
+              item.title || item.name || '',
+            );
+            const itemYear = extractMetadataYear(
+              item.release_date || item.first_air_date,
+            );
+            const titleMatch = isMetadataTitleMatch(itemTitle, normalizedTitle);
+            const yearMatch =
+              !normalizedYear || !itemYear || itemYear === normalizedYear;
+            return titleMatch && yearMatch;
+          }) || list[0];
+
+        setResolvedTmdbId(target.id);
+        setTmdbType(target.media_type);
+        globalCache.set(
+          tmdbIdCacheKey,
+          { id: target.id, type: target.media_type },
+          7 * 24 * 60 * 60,
+        );
+      } catch {
+        // TMDB 搜索失败时静默降级。
+      }
+    };
+
+    void searchTmdb();
+  }, [initialTmdbId, normalizedTitle, normalizedYear, title, tmdbType]);
+
+  useEffect(() => {
+    if (!tmdbEnabled || !resolvedTmdbId || resolvedTmdbId <= 0) {
+      setTmdbDetail(null);
+      return;
+    }
+
+    const fetchTmdbDetail = async () => {
+      setTmdbLoading(true);
+      try {
+        const response = await fetch(
+          `/api/tmdb?action=detail&type=${tmdbType}&id=${resolvedTmdbId}`,
+        );
+        if (!response.ok) {
+          setTmdbDetail(null);
+          return;
+        }
+
+        const data = (await response.json()) as {
+          overview?: string;
+          genres?: Array<{ name: string }>;
+          production_countries?: Array<{ name: string }>;
+          release_date?: string;
+          first_air_date?: string;
+          runtime?: number;
+          number_of_seasons?: number;
+          number_of_episodes?: number;
+        };
+
+        const durations: string[] = [];
+        if (typeof data.runtime === 'number' && data.runtime > 0) {
+          durations.push(`${data.runtime} 分钟`);
+        }
+        if (
+          typeof data.number_of_seasons === 'number' &&
+          data.number_of_seasons > 0
+        ) {
+          durations.push(`${data.number_of_seasons} 季`);
+        }
+        if (
+          typeof data.number_of_episodes === 'number' &&
+          data.number_of_episodes > 0
+        ) {
+          durations.push(`${data.number_of_episodes} 集`);
+        }
+
+        setTmdbDetail({
+          overview: data.overview?.trim() || '',
+          genres: (data.genres || []).map((item) => item.name).filter(Boolean),
+          countries: (data.production_countries || [])
+            .map((item) => item.name)
+            .filter(Boolean),
+          year: extractMetadataYear(data.release_date || data.first_air_date),
+          durations,
+        });
+      } finally {
+        setTmdbLoading(false);
+      }
+    };
+
+    void fetchTmdbDetail();
+  }, [resolvedTmdbId, tmdbEnabled, tmdbType]);
+
+  const {
+    detail: doubanDetail,
+    comments,
+    recommends,
+    detailLoading,
+    commentsLoading,
+    recommendsLoading,
+    commentsTotal,
+  } = useDoubanInfo(resolvedDoubanId > 0 ? resolvedDoubanId : null);
+
+  const primarySummary = (doubanDetail?.summary || '').trim();
+  const tmdbSummary = (tmdbDetail?.overview || '').trim();
+
+  const mergedDetail = useMemo(() => {
+    if (doubanDetail) {
+      return {
+        ...doubanDetail,
+        genres:
+          doubanDetail.genres && doubanDetail.genres.length > 0
+            ? doubanDetail.genres
+            : tmdbDetail?.genres,
+        countries:
+          doubanDetail.countries && doubanDetail.countries.length > 0
+            ? doubanDetail.countries
+            : tmdbDetail?.countries,
+        durations:
+          doubanDetail.durations && doubanDetail.durations.length > 0
+            ? doubanDetail.durations
+            : tmdbDetail?.durations,
+        summary: primarySummary || fallbackSummary || tmdbSummary,
+      };
+    }
+
+    return {
+      id: String(resolvedTmdbId || title || 'fallback'),
+      title,
+      year: tmdbDetail?.year || normalizedYear || year,
+      summary: fallbackSummary || tmdbSummary,
+      genres: tmdbDetail?.genres || [],
+      countries: tmdbDetail?.countries || [],
+      durations: tmdbDetail?.durations || [],
+      directors: [],
+      casts: [],
+    };
+  }, [
+    doubanDetail,
+    fallbackSummary,
+    normalizedYear,
+    primarySummary,
+    resolvedTmdbId,
+    title,
+    tmdbDetail,
+    tmdbSummary,
+    year,
+  ]);
+
+  const primarySummaryLabel = primarySummary ? '豆瓣简介' : '简介';
+  const secondarySummary =
+    tmdbSummary && tmdbSummary !== mergedDetail.summary
+      ? tmdbSummary
+      : undefined;
+  const showMetaLoading =
+    detailLoading && !primarySummary && !fallbackSummary && !tmdbSummary;
+
+  if (!title && !mergedDetail.summary && !tmdbLoading && !detailLoading) {
+    return null;
+  }
+
+  return (
+    <div className='mt-8 space-y-8 pb-8'>
+      <MovieMetaInfo
+        detail={mergedDetail}
+        loading={showMetaLoading}
+        showCast={true}
+        showSummary={true}
+        showTags={true}
+        primarySummaryLabel={primarySummaryLabel}
+        secondarySummary={secondarySummary}
+        secondarySummaryLabel='TMDB 简介'
+        secondarySummaryLoading={tmdbLoading && !secondarySummary}
+      />
+
+      {resolvedDoubanId > 0 ? (
+        <>
+          <MovieRecommends
+            recommends={recommends}
+            loading={recommendsLoading}
+            maxDisplay={10}
+          />
+
+          <MovieReviews
+            comments={comments}
+            loading={commentsLoading}
+            total={commentsTotal}
+            doubanId={resolvedDoubanId}
+            maxDisplay={6}
+          />
+        </>
+      ) : null}
+
+      {tmdbEnabled && resolvedTmdbId > 0 ? (
+        <p className='text-xs text-gray-500 dark:text-gray-400'>
+          当前页面已启用 TMDB 元数据补全。
+        </p>
+      ) : null}
+    </div>
+  );
+};
+
 // FavoriteIcon 组件
 const FavoriteIcon = ({ filled }: { filled: boolean }) => {
   if (filled) {

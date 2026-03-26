@@ -10,12 +10,14 @@ import {
   Clover,
   Film,
   Home,
+  Library,
   Radio,
   Search,
   Tv,
 } from 'lucide-react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
+  ComponentType,
   memo,
   MouseEvent,
   useCallback,
@@ -31,7 +33,18 @@ import { useSite } from './SiteProvider';
 import { ThemeToggle } from './ThemeToggle';
 import { UserMenu } from './UserMenu';
 
-const NAV_ITEMS = [
+interface NavItem {
+  key: string;
+  href: string;
+  icon: ComponentType<{ className?: string }>;
+  label: string;
+  chip: string;
+  type: 'exact' | 'douban';
+  doubanType?: string;
+  openInNewTab: boolean;
+}
+
+const BASE_NAV_ITEMS: NavItem[] = [
   {
     key: 'home',
     href: '/',
@@ -117,7 +130,7 @@ const NAV_ITEMS = [
     type: 'exact',
     openInNewTab: false,
   },
-] as const;
+];
 
 function computeActiveKey(pathname: string, type: string | null): string {
   if (pathname.startsWith('/douban') && type) {
@@ -135,6 +148,8 @@ function computeActiveKey(pathname: string, type: string | null): string {
       return 'source-browser';
     case '/live':
       return 'live';
+    case '/my-library':
+      return 'my-library';
     default:
       return '';
   }
@@ -153,9 +168,34 @@ function TopNavbar() {
   const [activeTabKey, setActiveTabKey] = useState(() =>
     computeActiveKey(pathname, currentType),
   );
+  const [navItems, setNavItems] = useState<NavItem[]>([...BASE_NAV_ITEMS]);
   const [isNavOverflowing, setIsNavOverflowing] = useState(false);
   const [showLeftMask, setShowLeftMask] = useState(false);
   const [showRightMask, setShowRightMask] = useState(false);
+
+  useEffect(() => {
+    const runtimeConfig = window.RUNTIME_CONFIG;
+    if (!runtimeConfig?.PRIVATE_LIBRARY_ENABLED) return;
+
+    setNavItems((prev) => {
+      if (prev.some((item) => item.key === 'my-library')) {
+        return prev;
+      }
+
+      return [
+        ...prev,
+        {
+          key: 'my-library',
+          href: '/my-library',
+          icon: Library,
+          label: '我的影库',
+          chip: 'chip-netdisk',
+          type: 'exact',
+          openInNewTab: false,
+        },
+      ] as NavItem[];
+    });
+  }, []);
 
   useEffect(() => {
     const newKey = computeActiveKey(pathname, currentType);
@@ -298,7 +338,7 @@ function TopNavbar() {
                   isNavOverflowing ? 'justify-start' : 'justify-center'
                 }`}
               >
-                {NAV_ITEMS.map((item) => {
+                {navItems.map((item) => {
                   const Icon = item.icon;
                   const openInNewTab = item.openInNewTab;
                   const active = activeTabKey === item.key;

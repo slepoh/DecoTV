@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 
 import { AdminConfig } from './admin.types';
 import { getDefaultPanSouConfig, normalizePanSouConfig } from './pansou';
+import { normalizePrivateLibraryConfig } from './private-library-config';
 
 export interface ApiSite {
   key: string;
@@ -286,6 +287,13 @@ async function getInitConfig(
         process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE ||
         'cmliussss-cdn-tencent',
       DoubanImageProxy: process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '',
+      TmdbProxyType: process.env.TMDB_REVERSE_PROXY
+        ? 'reverse'
+        : process.env.TMDB_PROXY
+          ? 'forward'
+          : 'direct',
+      TmdbProxy: process.env.TMDB_PROXY || '',
+      TmdbReverseProxy: process.env.TMDB_REVERSE_PROXY || '',
       DisableYellowFilter:
         process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
       FluidSearch: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
@@ -297,6 +305,19 @@ async function getInitConfig(
     CustomCategories: [],
     LiveConfig: [],
     PanSouConfig: getDefaultPanSouConfig(),
+    TMDBConfig: {
+      ApiKey: process.env.TMDB_API_KEY || '',
+      ProxyType: process.env.TMDB_REVERSE_PROXY
+        ? 'reverse'
+        : process.env.TMDB_PROXY
+          ? 'forward'
+          : 'direct',
+      Proxy: process.env.TMDB_PROXY || '',
+      ReverseProxy: process.env.TMDB_REVERSE_PROXY || '',
+    },
+    PrivateLibraryConfig: {
+      connectors: [],
+    },
   };
 
   // 补充用户信息
@@ -391,6 +412,13 @@ export function getLocalModeConfig(): AdminConfig {
         process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE ||
         'cmliussss-cdn-tencent',
       DoubanImageProxy: process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '',
+      TmdbProxyType: process.env.TMDB_REVERSE_PROXY
+        ? 'reverse'
+        : process.env.TMDB_PROXY
+          ? 'forward'
+          : 'direct',
+      TmdbProxy: process.env.TMDB_PROXY || '',
+      TmdbReverseProxy: process.env.TMDB_REVERSE_PROXY || '',
       DisableYellowFilter:
         process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
       FluidSearch: process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
@@ -408,6 +436,19 @@ export function getLocalModeConfig(): AdminConfig {
     CustomCategories: [],
     LiveConfig: [],
     PanSouConfig: getDefaultPanSouConfig(),
+    TMDBConfig: {
+      ApiKey: process.env.TMDB_API_KEY || '',
+      ProxyType: process.env.TMDB_REVERSE_PROXY
+        ? 'reverse'
+        : process.env.TMDB_PROXY
+          ? 'forward'
+          : 'direct',
+      Proxy: process.env.TMDB_PROXY || '',
+      ReverseProxy: process.env.TMDB_REVERSE_PROXY || '',
+    },
+    PrivateLibraryConfig: {
+      connectors: [],
+    },
   };
   return adminConfig;
 }
@@ -439,6 +480,27 @@ export async function getConfig(): Promise<AdminConfig> {
 }
 
 export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
+  if (!adminConfig.SiteConfig) {
+    adminConfig.SiteConfig = getLocalModeConfig().SiteConfig;
+  }
+
+  if (!adminConfig.SiteConfig.TmdbProxyType) {
+    adminConfig.SiteConfig.TmdbProxyType = process.env.TMDB_REVERSE_PROXY
+      ? 'reverse'
+      : process.env.TMDB_PROXY
+        ? 'forward'
+        : 'direct';
+  }
+
+  if (typeof adminConfig.SiteConfig.TmdbProxy !== 'string') {
+    adminConfig.SiteConfig.TmdbProxy = process.env.TMDB_PROXY || '';
+  }
+
+  if (typeof adminConfig.SiteConfig.TmdbReverseProxy !== 'string') {
+    adminConfig.SiteConfig.TmdbReverseProxy =
+      process.env.TMDB_REVERSE_PROXY || '';
+  }
+
   // 确保必要的属性存在和初始化
   if (!adminConfig.UserConfig) {
     adminConfig.UserConfig = { Users: [] };
@@ -461,6 +523,24 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   if (!adminConfig.LiveConfig || !Array.isArray(adminConfig.LiveConfig)) {
     adminConfig.LiveConfig = [];
   }
+
+  if (!adminConfig.TMDBConfig || typeof adminConfig.TMDBConfig !== 'object') {
+    adminConfig.TMDBConfig = {
+      ApiKey: process.env.TMDB_API_KEY || '',
+      ProxyType: process.env.TMDB_REVERSE_PROXY
+        ? 'reverse'
+        : process.env.TMDB_PROXY
+          ? 'forward'
+          : 'direct',
+      Proxy: process.env.TMDB_PROXY || '',
+      ReverseProxy: process.env.TMDB_REVERSE_PROXY || '',
+    };
+  }
+
+  adminConfig.PrivateLibraryConfig = normalizePrivateLibraryConfig(
+    adminConfig.PrivateLibraryConfig,
+  );
+
   adminConfig.PanSouConfig = normalizePanSouConfig(adminConfig.PanSouConfig);
 
   // 站长变更自检

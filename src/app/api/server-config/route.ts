@@ -41,6 +41,9 @@ export async function GET(request: NextRequest) {
     LoginBackground:
       config.SiteConfig.LoginBackground ||
       'https://pan.yyds.nyc.mn/background.png',
+    PrivateLibraryEnabled: Boolean(
+      config.PrivateLibraryConfig?.connectors?.some((item) => item.enabled),
+    ),
     // 提供说明信息
     AdultFilterInfo: {
       enabled: adultFilterEnabled,
