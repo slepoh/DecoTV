@@ -2,7 +2,6 @@
 
 import { Loader2, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { POSTER_FALLBACK_SRC } from '@/lib/image-url';
@@ -11,8 +10,6 @@ import ExternalImage from '@/components/ExternalImage';
 import PageLayout from '@/components/PageLayout';
 
 type ConnectorType = 'openlist' | 'emby' | 'jellyfin' | 'xiaoya';
-type LibraryFilterType = 'all' | 'movie' | 'tv' | 'anime';
-type SortMode = 'recent' | 'title' | 'year' | 'rating';
 
 interface LibraryItem {
   id: string;
@@ -38,15 +35,19 @@ interface LibraryItem {
   episodeCount?: number;
   seasonCount?: number;
   isAnime?: boolean;
-  scannedAt: number;
-  sortKey: number;
+}
+
+interface LibraryCategoryItem {
+  key: string;
+  label: string;
+  count: number;
 }
 
 interface LibraryConnector {
   id: string;
   name: string;
   displayName?: string;
-  sourceName?: string;
+  sourceName: string;
   type: ConnectorType;
   typeLabel: string;
 }
@@ -65,9 +66,20 @@ interface PaginationPayload {
   nextOffset: number;
 }
 
+interface LibraryItemsResponse {
+  items?: LibraryItem[];
+  categories?: LibraryCategoryItem[];
+  connectors?: LibraryConnector[];
+  errors?: LibraryErrorItem[];
+  pagination?: PaginationPayload;
+  error?: string;
+  details?: string;
+}
+
 interface LibraryStatusResponse {
   enabled: boolean;
   connectors: LibraryConnector[];
+  error?: string;
 }
 
 const PAGE_SIZE = 24;
@@ -82,12 +94,15 @@ const SOURCE_BADGE_STYLES: Record<ConnectorType, string> = {
     'border-sky-300/35 bg-sky-500/80 text-sky-50 shadow-[0_8px_24px_-16px_rgba(14,165,233,0.9)]',
 };
 
-const LANGUAGE_LABELS: Record<string, string> = {
-  zh: '中文',
-  en: '英语',
-  ja: '日语',
-  ko: '韩语',
-};
+function defaultPagination(): PaginationPayload {
+  return {
+    total: 0,
+    offset: 0,
+    limit: PAGE_SIZE,
+    hasMore: false,
+    nextOffset: PAGE_SIZE,
+  };
+}
 
 function LibrarySkeleton() {
   return (
@@ -107,42 +122,6 @@ function LibrarySkeleton() {
       ))}
     </div>
   );
-}
-
-function normalizeText(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function filterTypeLabel(item: LibraryItem): LibraryFilterType {
-  if (item.isAnime) {
-    return 'anime';
-  }
-  return item.mediaType;
-}
-
-function mediaTypeLabel(item: LibraryItem): string {
-  if (item.isAnime) {
-    return '动漫';
-  }
-  return item.mediaType === 'movie' ? '电影' : '剧集';
-}
-
-function buildSearchHaystack(item: LibraryItem): string {
-  return [
-    item.title,
-    item.overview,
-    item.libraryName,
-    item.connectorSourceName,
-    item.connectorName,
-    ...(item.genres || []),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-}
-
-function formatSourceLabel(item: LibraryItem): string {
-  return item.connectorSourceName;
 }
 
 function mergeLibraryItems(
@@ -187,27 +166,26 @@ function getConnectorUiLabel(
   return `${baseLabel} · ${connector.id.slice(-4)}`;
 }
 
-function toSortLabel(mode: SortMode): string {
-  switch (mode) {
-    case 'title':
-      return '按名称 A-Z';
-    case 'year':
-      return '按年份最新';
-    case 'rating':
-      return '按 TMDB 评分最高';
-    default:
-      return '最近扫描到';
+function mediaTypeLabel(item: LibraryItem): string {
+  if (item.isAnime) {
+    return '动漫';
   }
+
+  return item.mediaType === 'movie' ? '电影' : '剧集';
+}
+
+function formatSourceLabel(item: LibraryItem): string {
+  return item.connectorSourceName;
 }
 
 export default function MyLibraryPage() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
   const [items, setItems] = useState<LibraryItem[]>([]);
+  const [categories, setCategories] = useState<LibraryCategoryItem[]>([]);
   const [connectors, setConnectors] = useState<LibraryConnector[]>([]);
-  const [connectorsLoaded, setConnectorsLoaded] = useState(false);
-  const [initialSourceResolved, setInitialSourceResolved] = useState(false);
+  const [selectedSource, setSelectedSource] = useState('all');
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [keyword, setKeyword] = useState('');
+  const [searchKeyword, setSearchKeyword] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -215,87 +193,43 @@ export default function MyLibraryPage() {
   const [connectorErrors, setConnectorErrors] = useState<LibraryErrorItem[]>(
     [],
   );
-  const [pagination, setPagination] = useState<PaginationPayload | null>(null);
-  const [keyword, setKeyword] = useState(searchParams.get('q') || '');
+  const [pagination, setPagination] =
+    useState<PaginationPayload>(defaultPagination());
 
-  const sourceFilter = searchParams.get('source') || 'all';
-  const typeFilter = (searchParams.get('type') || 'all') as LibraryFilterType;
-  const yearFilter = searchParams.get('year') || 'all';
-  const languageFilter = searchParams.get('language') || 'all';
-  const sortFilter = (searchParams.get('sort') || 'recent') as SortMode;
-  const searchKeyword = (searchParams.get('q') || '').trim();
-  const hasExplicitSourceParam = searchParams.has('source');
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearchKeyword(keyword.trim());
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [keyword]);
 
   const fetchConnectors = useCallback(async () => {
     try {
       const resp = await fetch('/api/private-library/status', {
         cache: 'no-store',
       });
-      const data = (await resp.json()) as LibraryStatusResponse & {
-        error?: string;
-      };
+      const data = (await resp.json()) as LibraryStatusResponse;
 
       if (!resp.ok) {
         throw new Error(data.error || '读取影库来源失败');
       }
 
       setConnectors(data.connectors || []);
-    } catch (currentError) {
-      setError(
-        currentError instanceof Error
-          ? currentError.message
-          : '读取影库来源失败',
-      );
-    } finally {
-      setConnectorsLoaded(true);
+    } catch {
+      // 来源栏读取失败时不阻断主内容请求。
     }
   }, []);
 
-  const updateQuery = useCallback(
-    (patch: Record<string, string | null>) => {
-      const next = new URLSearchParams(searchParams.toString());
-
-      Object.entries(patch).forEach(([key, value]) => {
-        if (!value || value === 'all' || value === 'recent') {
-          next.delete(key);
-        } else {
-          next.set(key, value);
-        }
-      });
-
-      const queryString = next.toString();
-      if (queryString === searchParams.toString()) {
-        return;
-      }
-
-      router.replace(queryString ? `${pathname}?${queryString}` : pathname, {
-        scroll: false,
-      });
-    },
-    [pathname, router, searchParams],
-  );
-
-  useEffect(() => {
-    setKeyword(searchParams.get('q') || '');
-  }, [searchParams]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      updateQuery({ q: keyword.trim() || null });
-    }, 250);
-
-    return () => window.clearTimeout(timer);
-  }, [keyword, updateQuery]);
-
-  const loadItems = useCallback(
+  const fetchItems = useCallback(
     async ({
-      forceRefresh = false,
       append = false,
       offset = 0,
+      forceRefresh = false,
     }: {
-      forceRefresh?: boolean;
       append?: boolean;
       offset?: number;
+      forceRefresh?: boolean;
     } = {}) => {
       if (append) {
         setLoadingMore(true);
@@ -307,30 +241,33 @@ export default function MyLibraryPage() {
 
       try {
         setError('');
-        const query = new URLSearchParams();
-        query.set('limit', String(PAGE_SIZE));
-        query.set('offset', String(offset));
-        if (forceRefresh) {
-          query.set('refresh', '1');
+        if (!append) {
+          setConnectorErrors([]);
         }
-        if (sourceFilter !== 'all') {
-          query.set('connectorId', sourceFilter);
+
+        const query = new URLSearchParams();
+        query.set('offset', String(offset));
+        query.set('limit', String(PAGE_SIZE));
+        if (selectedSource !== 'all') {
+          query.set('connectorId', selectedSource);
+        }
+        if (selectedCategory !== 'all') {
+          query.set('category', selectedCategory);
         }
         if (searchKeyword) {
           query.set('q', searchKeyword);
         }
+        if (forceRefresh) {
+          query.set('refresh', '1');
+        }
 
-        const resp = await fetch(`/api/private-library/items?${query}`, {
-          cache: 'no-store',
-        });
-        const data = (await resp.json()) as {
-          items?: LibraryItem[];
-          connectors?: LibraryConnector[];
-          errors?: LibraryErrorItem[];
-          error?: string;
-          details?: string;
-          pagination?: PaginationPayload;
-        };
+        const resp = await fetch(
+          `/api/private-library/items?${query.toString()}`,
+          {
+            cache: 'no-store',
+          },
+        );
+        const data = (await resp.json()) as LibraryItemsResponse;
 
         if (!resp.ok) {
           throw new Error(data.error || data.details || '读取私人影库失败');
@@ -340,14 +277,22 @@ export default function MyLibraryPage() {
         setItems((currentItems) =>
           append ? mergeLibraryItems(currentItems, nextItems) : nextItems,
         );
-        setPagination(data.pagination || null);
+        setCategories(data.categories || []);
+        setPagination(data.pagination || defaultPagination());
         setConnectorErrors(data.errors || []);
+        if ((data.connectors || []).length > 0) {
+          setConnectors((current) =>
+            current.length > 0 ? current : data.connectors || current,
+          );
+        }
       } catch (currentError) {
         if (!append) {
           setItems([]);
-          setPagination(null);
+          setCategories([]);
+          setPagination(defaultPagination());
           setConnectorErrors([]);
         }
+
         setError(
           currentError instanceof Error
             ? currentError.message
@@ -359,7 +304,7 @@ export default function MyLibraryPage() {
         setLoadingMore(false);
       }
     },
-    [searchKeyword, sourceFilter],
+    [searchKeyword, selectedCategory, selectedSource],
   );
 
   useEffect(() => {
@@ -367,179 +312,55 @@ export default function MyLibraryPage() {
   }, [fetchConnectors]);
 
   useEffect(() => {
-    if (!connectorsLoaded) {
-      return;
-    }
+    void fetchItems({ append: false, offset: 0 });
+  }, [fetchItems]);
 
-    if (!initialSourceResolved) {
-      setInitialSourceResolved(true);
-
-      if (
-        connectors.length > 1 &&
-        sourceFilter === 'all' &&
-        !hasExplicitSourceParam
-      ) {
-        updateQuery({ source: connectors[0].id });
-        return;
-      }
-    }
-
+  useEffect(() => {
     if (
-      hasExplicitSourceParam &&
-      sourceFilter !== 'all' &&
+      selectedSource !== 'all' &&
       connectors.length > 0 &&
-      !connectors.some((item) => item.id === sourceFilter)
+      !connectors.some((item) => item.id === selectedSource)
     ) {
-      updateQuery({ source: null });
-      return;
+      setSelectedSource('all');
+    }
+  }, [connectors, selectedSource]);
+
+  useEffect(() => {
+    if (
+      selectedCategory !== 'all' &&
+      categories.length > 0 &&
+      !categories.some((item) => item.key === selectedCategory)
+    ) {
+      setSelectedCategory('all');
+    }
+  }, [categories, selectedCategory]);
+
+  const activeSummary = useMemo(() => {
+    const currentCategory = categories.find(
+      (item) => item.key === selectedCategory,
+    );
+    const sourceCountLabel =
+      selectedSource === 'all'
+        ? '全部来源'
+        : connectors.find((item) => item.id === selectedSource)?.sourceName ||
+          '当前来源';
+
+    if (currentCategory) {
+      return `${sourceCountLabel} · ${currentCategory.label} · ${currentCategory.count}`;
     }
 
-    void loadItems();
+    return `${sourceCountLabel} · 共 ${pagination.total} 条`;
   }, [
+    categories,
     connectors,
-    connectorsLoaded,
-    hasExplicitSourceParam,
-    initialSourceResolved,
-    loadItems,
-    sourceFilter,
-    updateQuery,
+    pagination.total,
+    selectedCategory,
+    selectedSource,
   ]);
-
-  const sourceOptions = useMemo(() => {
-    if (connectors.length <= 1) {
-      return [];
-    }
-
-    return connectors.map((connector) => ({
-      value: connector.id,
-      label: getConnectorUiLabel(connector, connectors),
-      type: connector.type,
-    }));
-  }, [connectors]);
-
-  const yearOptions = useMemo(() => {
-    return Array.from(
-      new Set(
-        items
-          .map((item) => item.year)
-          .filter((year): year is number => Number.isFinite(year || NaN)),
-      ),
-    ).sort((left, right) => right - left);
-  }, [items]);
-
-  const languageOptions = useMemo(() => {
-    return Object.entries(LANGUAGE_LABELS).filter(([code]) =>
-      items.some((item) => normalizeText(item.originalLanguage || '') === code),
-    );
-  }, [items]);
-
-  const filteredItems = useMemo(() => {
-    const keywordQuery = normalizeText(searchKeyword);
-
-    const next = items
-      .filter((item) => {
-        if (
-          sourceFilter !== 'all' &&
-          item.connectorId !== sourceFilter &&
-          item.connectorType !== sourceFilter
-        ) {
-          return false;
-        }
-
-        if (typeFilter !== 'all' && filterTypeLabel(item) !== typeFilter) {
-          return false;
-        }
-
-        if (yearFilter !== 'all' && String(item.year || '') !== yearFilter) {
-          return false;
-        }
-
-        if (
-          languageFilter !== 'all' &&
-          normalizeText(item.originalLanguage || '') !== languageFilter
-        ) {
-          return false;
-        }
-
-        if (keywordQuery && !buildSearchHaystack(item).includes(keywordQuery)) {
-          return false;
-        }
-
-        return true;
-      })
-      .sort((left, right) => {
-        switch (sortFilter) {
-          case 'title':
-            return left.title.localeCompare(right.title, 'zh-CN');
-          case 'year':
-            return (right.year || 0) - (left.year || 0);
-          case 'rating':
-            return (right.tmdbRating || 0) - (left.tmdbRating || 0);
-          default:
-            if (right.scannedAt !== left.scannedAt) {
-              return right.scannedAt - left.scannedAt;
-            }
-            return left.sortKey - right.sortKey;
-        }
-      });
-
-    return next;
-  }, [
-    items,
-    languageFilter,
-    searchKeyword,
-    sortFilter,
-    sourceFilter,
-    typeFilter,
-    yearFilter,
-  ]);
-
-  const activeSourceName = useMemo(() => {
-    if (sourceFilter === 'all') {
-      return '全部来源';
-    }
-
-    const connector = connectors.find(
-      (item) => item.id === sourceFilter || item.type === sourceFilter,
-    );
-    return (
-      (connector ? getConnectorUiLabel(connector, connectors) : '') ||
-      connector?.typeLabel ||
-      '当前来源'
-    );
-  }, [connectors, sourceFilter]);
-
-  const activeTypeLabel = useMemo(() => {
-    switch (typeFilter) {
-      case 'movie':
-        return '电影';
-      case 'tv':
-        return '剧集';
-      case 'anime':
-        return '动漫';
-      default:
-        return '内容';
-    }
-  }, [typeFilter]);
-
-  const summary = useMemo(() => {
-    return `${filteredItems.length} 部资源 · ${toSortLabel(sortFilter)}`;
-  }, [filteredItems.length, sortFilter]);
-
-  const clearFilters = () => {
-    updateQuery({
-      source: null,
-      type: null,
-      year: null,
-      language: null,
-      sort: null,
-      q: null,
-    });
-  };
 
   const renderCard = (item: LibraryItem) => {
     const playUrl = `/play?source=private_library&id=${encodeURIComponent(item.id)}&title=${encodeURIComponent(item.title)}&year=${encodeURIComponent(item.year ? String(item.year) : '')}&stitle=${encodeURIComponent(item.title)}&stype=${encodeURIComponent(item.mediaType)}&connectorId=${encodeURIComponent(item.connectorId)}&sourceItemId=${encodeURIComponent(item.sourceItemId)}`;
-    const metaInfo = [
+    const metaLine = [
       item.tmdbRating ? `TMDB ${item.tmdbRating.toFixed(1)}` : '',
       item.year ? String(item.year) : '',
       item.mediaType === 'tv'
@@ -578,13 +399,6 @@ export default function MyLibraryPage() {
             <div className='absolute right-3 top-3 inline-flex rounded-full border border-white/15 bg-slate-950/70 px-2 py-1 text-[11px] font-medium text-slate-100 backdrop-blur-sm'>
               {mediaTypeLabel(item)}
             </div>
-            <div className='absolute inset-x-0 bottom-0 hidden translate-y-2 px-3 pb-3 opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100 md:block'>
-              {metaInfo ? (
-                <div className='rounded-xl border border-white/10 bg-slate-950/80 px-3 py-2 text-xs text-slate-200 backdrop-blur'>
-                  {metaInfo}
-                </div>
-              ) : null}
-            </div>
           </div>
         </Link>
 
@@ -593,8 +407,8 @@ export default function MyLibraryPage() {
             {item.title}
           </div>
 
-          {metaInfo ? (
-            <div className='text-xs text-slate-400 md:hidden'>{metaInfo}</div>
+          {metaLine ? (
+            <div className='text-xs text-slate-400'>{metaLine}</div>
           ) : null}
 
           {item.libraryName ? (
@@ -634,11 +448,12 @@ export default function MyLibraryPage() {
                 我的影库
               </h1>
               <p className='mt-1 text-sm text-slate-300/90'>
-                聚合已接入的 OpenList、小雅 Alist、Emby、Jellyfin 私有媒体资源。
+                聚合已接入的 OpenList、小雅 Alist、Emby、Jellyfin
+                私人媒体资源，支持按来源、分类和关键词快速浏览。
               </p>
             </div>
             <div className='inline-flex rounded-full border border-emerald-300/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200'>
-              {summary}
+              {activeSummary}
             </div>
           </div>
 
@@ -648,13 +463,20 @@ export default function MyLibraryPage() {
               <input
                 value={keyword}
                 onChange={(event) => setKeyword(event.target.value)}
-                placeholder='搜索片名、简介、类型或来源...'
+                placeholder='搜索片名、简介、类型或来源名称...'
                 className='h-11 w-full rounded-xl border border-slate-600/60 bg-slate-900/45 pl-10 pr-4 text-sm text-slate-100 outline-none transition-colors focus:border-emerald-400/60'
               />
             </label>
             <button
               type='button'
-              onClick={() => void loadItems({ forceRefresh: true })}
+              onClick={() => {
+                void fetchConnectors();
+                void fetchItems({
+                  append: false,
+                  offset: 0,
+                  forceRefresh: true,
+                });
+              }}
               className='inline-flex items-center justify-center gap-2 rounded-xl border border-slate-600/70 bg-slate-900/45 px-4 py-2.5 text-sm text-slate-100 transition-colors hover:border-emerald-400/50 hover:text-emerald-200'
             >
               {refreshing ? (
@@ -667,122 +489,80 @@ export default function MyLibraryPage() {
           </div>
         </section>
 
-        <section className='rounded-2xl border border-white/10 bg-slate-900/78 p-4'>
-          <div className='flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-400'>
-            <SlidersHorizontal className='h-4 w-4' />
-            筛选与排序
-          </div>
+        {connectors.length > 1 ? (
+          <section className='rounded-2xl border border-white/10 bg-slate-900/78 p-4'>
+            <div className='flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-400'>
+              <SlidersHorizontal className='h-4 w-4' />
+              来源筛选
+            </div>
 
-          {sourceOptions.length > 0 ? (
             <div className='mt-4 flex flex-wrap gap-2'>
               <button
                 type='button'
-                onClick={() => updateQuery({ source: null })}
+                onClick={() => {
+                  setSelectedSource('all');
+                  setSelectedCategory('all');
+                }}
                 className={`rounded-xl border px-3 py-1.5 text-sm transition-all ${
-                  sourceFilter === 'all'
+                  selectedSource === 'all'
                     ? 'border-emerald-300/60 bg-emerald-500/20 text-emerald-200'
                     : 'border-white/10 bg-slate-900/55 text-slate-300 hover:border-emerald-300/30 hover:text-emerald-200'
                 }`}
               >
                 全部来源
               </button>
-              {sourceOptions.map((source) => (
+              {connectors.map((connector) => (
                 <button
-                  key={source.value}
+                  key={connector.id}
                   type='button'
-                  onClick={() => updateQuery({ source: source.value })}
+                  onClick={() => {
+                    setSelectedSource(connector.id);
+                    setSelectedCategory('all');
+                  }}
                   className={`rounded-xl border px-3 py-1.5 text-sm transition-all ${
-                    sourceFilter === source.value
+                    selectedSource === connector.id
                       ? 'border-emerald-300/60 bg-emerald-500/20 text-emerald-200'
                       : 'border-white/10 bg-slate-900/55 text-slate-300 hover:border-emerald-300/30 hover:text-emerald-200'
                   }`}
                 >
-                  {source.label}
+                  {getConnectorUiLabel(connector, connectors)}
                 </button>
               ))}
             </div>
-          ) : null}
+          </section>
+        ) : null}
 
-          <div className='mt-4 flex flex-wrap gap-2'>
-            {(
-              [
-                ['all', '全部'],
-                ['movie', '电影'],
-                ['tv', '剧集'],
-                ['anime', '动漫'],
-              ] as Array<[LibraryFilterType, string]>
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type='button'
-                onClick={() =>
-                  updateQuery({ type: value === 'all' ? null : value })
-                }
-                className={`rounded-xl border px-3 py-1.5 text-sm transition-all ${
-                  typeFilter === value
-                    ? 'border-emerald-300/60 bg-emerald-500/20 text-emerald-200'
-                    : 'border-white/10 bg-slate-900/55 text-slate-300 hover:border-emerald-300/30 hover:text-emerald-200'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+        {categories.length > 0 ? (
+          <section className='rounded-2xl border border-white/10 bg-slate-900/78 p-4'>
+            <div className='flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-400'>
+              <SlidersHorizontal className='h-4 w-4' />
+              分类浏览
+            </div>
 
-          <div className='mt-4 grid gap-3 md:grid-cols-3'>
-            <select
-              value={yearFilter}
-              onChange={(event) =>
-                updateQuery({
-                  year:
-                    event.target.value === 'all' ? null : event.target.value,
-                })
-              }
-              className='h-11 rounded-xl border border-slate-600/60 bg-slate-900/45 px-4 text-sm text-slate-100 outline-none transition-colors focus:border-emerald-400/60'
-            >
-              <option value='all'>全部年份</option>
-              {yearOptions.map((year) => (
-                <option key={year} value={String(year)}>
-                  {year}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={languageFilter}
-              onChange={(event) =>
-                updateQuery({
-                  language:
-                    event.target.value === 'all' ? null : event.target.value,
-                })
-              }
-              className='h-11 rounded-xl border border-slate-600/60 bg-slate-900/45 px-4 text-sm text-slate-100 outline-none transition-colors focus:border-emerald-400/60'
-            >
-              <option value='all'>全部语言</option>
-              {languageOptions.map(([code, label]) => (
-                <option key={code} value={code}>
-                  {label}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={sortFilter}
-              onChange={(event) =>
-                updateQuery({
-                  sort:
-                    event.target.value === 'recent' ? null : event.target.value,
-                })
-              }
-              className='h-11 rounded-xl border border-slate-600/60 bg-slate-900/45 px-4 text-sm text-slate-100 outline-none transition-colors focus:border-emerald-400/60'
-            >
-              <option value='recent'>最近扫描到</option>
-              <option value='title'>按名称 A-Z</option>
-              <option value='year'>按年份最新</option>
-              <option value='rating'>按 TMDB 评分最高</option>
-            </select>
-          </div>
-        </section>
+            <div className='mt-4 flex flex-wrap gap-2'>
+              {categories.map((category) => {
+                const active = category.key === selectedCategory;
+                return (
+                  <button
+                    key={category.key}
+                    type='button'
+                    onClick={() => setSelectedCategory(category.key)}
+                    className={`rounded-xl border px-3 py-1.5 text-sm transition-all ${
+                      active
+                        ? 'border-emerald-300/60 bg-emerald-500/20 text-emerald-200'
+                        : 'border-white/10 bg-slate-900/55 text-slate-300 hover:border-emerald-300/30 hover:text-emerald-200'
+                    }`}
+                  >
+                    {category.label}
+                    <span className='ml-1 text-xs opacity-80'>
+                      {category.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
 
         {loading ? <LibrarySkeleton /> : null}
 
@@ -805,21 +585,26 @@ export default function MyLibraryPage() {
           </section>
         ) : null}
 
-        {!loading && !error && filteredItems.length === 0 ? (
+        {!loading && !error && items.length === 0 ? (
           <section className='rounded-3xl border border-dashed border-white/10 bg-slate-900/72 px-6 py-10 text-center'>
             <p className='text-lg font-semibold text-slate-100'>
-              在 {activeSourceName} 中没有找到符合条件的 {activeTypeLabel}
+              当前条件下没有找到可显示的资源
             </p>
             <p className='mt-2 text-sm text-slate-400'>
-              可以尝试清除筛选条件，或前往后台重新扫描私人影库连接。
+              可以尝试切换来源、清空搜索关键词，或者前往后台重新扫描私人影库连接。
             </p>
             <div className='mt-4 flex justify-center gap-3'>
               <button
                 type='button'
-                onClick={clearFilters}
+                onClick={() => {
+                  setSelectedSource('all');
+                  setSelectedCategory('all');
+                  setKeyword('');
+                  setSearchKeyword('');
+                }}
                 className='rounded-xl border border-emerald-300/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200 transition-colors hover:bg-emerald-500/20'
               >
-                清除筛选
+                清空筛选
               </button>
               <Link
                 href='/admin'
@@ -831,29 +616,40 @@ export default function MyLibraryPage() {
           </section>
         ) : null}
 
-        {!loading && !error && filteredItems.length > 0 ? (
+        {!loading && !error && items.length > 0 ? (
           <>
             <section className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6'>
-              {filteredItems.map((item) => renderCard(item))}
+              {items.map((item) => renderCard(item))}
             </section>
 
-            {pagination?.hasMore ? (
-              <div className='flex justify-center'>
+            <div className='flex flex-col items-center gap-3'>
+              <p className='text-xs text-slate-400'>
+                已显示 {items.length} / {pagination.total} 条资源
+              </p>
+
+              {pagination.hasMore ? (
                 <button
                   type='button'
                   onClick={() =>
-                    void loadItems({
+                    void fetchItems({
                       append: true,
-                      offset: pagination?.nextOffset || items.length,
+                      offset: pagination.nextOffset,
                     })
                   }
                   disabled={loadingMore}
-                  className='rounded-xl border border-slate-600/70 bg-slate-900/55 px-5 py-2.5 text-sm text-slate-100 transition-colors hover:border-emerald-400/50 hover:text-emerald-200'
+                  className='inline-flex min-w-36 items-center justify-center gap-2 rounded-xl border border-slate-600/70 bg-slate-900/55 px-5 py-2.5 text-sm text-slate-100 transition-colors hover:border-emerald-400/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60'
                 >
-                  加载更多
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className='h-4 w-4 animate-spin' />
+                      正在加载...
+                    </>
+                  ) : (
+                    '加载更多'
+                  )}
                 </button>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </>
         ) : null}
       </main>
