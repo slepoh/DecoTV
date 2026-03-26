@@ -4235,6 +4235,9 @@ const VideoSourceConfig = ({
         message={alertModal.message}
         timer={alertModal.timer}
         showConfirm={alertModal.showConfirm}
+        onConfirm={alertModal.onConfirm}
+        confirmText={alertModal.confirmText}
+        cancelText={alertModal.cancelText}
       />
 
       {/* 导入导出模态框 */}
@@ -8859,6 +8862,12 @@ const PrivateLibraryConfigPanel = ({
               placeholder='Token / API Key'
               className='md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm font-mono'
             />
+
+            <div className='md:col-span-2 text-xs text-gray-500 dark:text-gray-400'>
+              {connector.type === 'openlist'
+                ? 'OpenList 需要可用于 API 调用的 Token。'
+                : '当前 Emby / Jellyfin 接入走服务端 API Key / Access Token 模式，不支持仅凭用户名和密码直接连接。UserId 仅用于播放进度回写。'}
+            </div>
 
             <input
               type='text'
