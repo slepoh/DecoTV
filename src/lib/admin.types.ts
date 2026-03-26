@@ -21,10 +21,12 @@ export interface PanSouNode {
 export interface PrivateLibraryConnector {
   id: string;
   name: string;
-  type: 'openlist' | 'emby' | 'jellyfin';
+  displayName?: string;
+  type: 'openlist' | 'emby' | 'jellyfin' | 'xiaoya';
   enabled: boolean;
   serverUrl: string;
   token: string;
+  alistToken?: string;
   username?: string;
   password?: string;
   rootPath?: string;

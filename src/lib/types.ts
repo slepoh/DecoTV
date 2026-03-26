@@ -105,7 +105,7 @@ export interface SearchResult {
   douban_id?: number;
   tmdb_id?: number;
   connector_id?: string;
-  connector_type?: 'openlist' | 'emby' | 'jellyfin';
+  connector_type?: 'openlist' | 'emby' | 'jellyfin' | 'xiaoya';
   source_item_id?: string;
   private_audio_streams?: Array<{
     index: number;

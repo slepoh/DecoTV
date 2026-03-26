@@ -43,6 +43,8 @@ export interface TmdbMovieDetail {
   release_date: string;
   vote_average: number;
   runtime: number;
+  status: string;
+  original_language: string;
   genres: Array<{ id: number; name: string }>;
   production_countries: Array<{ iso_3166_1: string; name: string }>;
   spoken_languages: Array<{ iso_639_1: string; name: string }>;
@@ -57,8 +59,12 @@ export interface TmdbTvDetail {
   backdrop_path: string | null;
   first_air_date: string;
   vote_average: number;
+  status: string;
+  original_language: string;
   number_of_seasons: number;
   number_of_episodes: number;
+  episode_run_time: number[];
+  origin_country: string[];
   genres: Array<{ id: number; name: string }>;
   production_countries: Array<{ iso_3166_1: string; name: string }>;
   spoken_languages: Array<{ iso_639_1: string; name: string }>;
@@ -79,4 +85,22 @@ export interface TmdbSearchResult<T = unknown> {
   total_pages: number;
   total_results: number;
   results: T[];
+}
+
+export interface TmdbSearchMediaResult {
+  id: number;
+  media_type?: 'movie' | 'tv' | 'person';
+  title?: string;
+  name?: string;
+  original_title?: string;
+  original_name?: string;
+  overview?: string;
+  poster_path?: string | null;
+  backdrop_path?: string | null;
+  release_date?: string;
+  first_air_date?: string;
+  vote_average?: number;
+  genre_ids?: number[];
+  original_language?: string;
+  origin_country?: string[];
 }

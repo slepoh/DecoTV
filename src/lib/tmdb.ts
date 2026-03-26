@@ -6,6 +6,7 @@ import type {
   TmdbImageSet,
   TmdbMediaType,
   TmdbMovieDetail,
+  TmdbSearchMediaResult,
   TmdbSearchResult,
   TmdbTvDetail,
 } from './tmdb.types';
@@ -155,6 +156,8 @@ function mergeMovieDetails(
     release_date: primary.release_date || fallback.release_date,
     vote_average: primary.vote_average || fallback.vote_average,
     runtime: primary.runtime || fallback.runtime,
+    status: primary.status || fallback.status,
+    original_language: primary.original_language || fallback.original_language,
     genres: primary.genres?.length ? primary.genres : fallback.genres,
     production_countries: primary.production_countries?.length
       ? primary.production_countries
@@ -179,9 +182,19 @@ function mergeTvDetails(
     backdrop_path: primary.backdrop_path || fallback.backdrop_path,
     first_air_date: primary.first_air_date || fallback.first_air_date,
     vote_average: primary.vote_average || fallback.vote_average,
+    status: primary.status || fallback.status,
+    original_language: primary.original_language || fallback.original_language,
     number_of_seasons: primary.number_of_seasons || fallback.number_of_seasons,
     number_of_episodes:
       primary.number_of_episodes || fallback.number_of_episodes,
+    episode_run_time:
+      primary.episode_run_time?.length > 0
+        ? primary.episode_run_time
+        : fallback.episode_run_time,
+    origin_country:
+      primary.origin_country?.length > 0
+        ? primary.origin_country
+        : fallback.origin_country,
     genres: primary.genres?.length ? primary.genres : fallback.genres,
     production_countries: primary.production_countries?.length
       ? primary.production_countries
@@ -369,8 +382,8 @@ export async function tmdbSearch(
   type: 'movie' | 'tv' | 'multi',
   query: string,
   page = 1,
-): Promise<TmdbSearchResult> {
-  return withLanguageFallback<TmdbSearchResult>({
+): Promise<TmdbSearchResult<TmdbSearchMediaResult>> {
+  return withLanguageFallback<TmdbSearchResult<TmdbSearchMediaResult>>({
     endpoint: `/search/${type}`,
     params: {
       query,

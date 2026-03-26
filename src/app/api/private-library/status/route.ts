@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { verifyApiAuth } from '@/lib/auth';
 import {
+  formatPrivateLibrarySourceName,
   getPrivateLibraryConfig,
   getPrivateLibraryConnectorTypeLabel,
 } from '@/lib/private-library';
@@ -20,8 +21,10 @@ export async function GET(request: NextRequest) {
     .map((item) => ({
       id: item.id,
       name: item.name,
+      displayName: item.displayName,
       type: item.type,
       typeLabel: getPrivateLibraryConnectorTypeLabel(item.type),
+      sourceName: formatPrivateLibrarySourceName(item),
     }));
 
   return NextResponse.json({

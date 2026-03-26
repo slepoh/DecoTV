@@ -2,19 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { verifyApiAuth } from '@/lib/auth';
 import {
-  buildPrivateLibraryPosterUrl,
   formatPrivateLibrarySourceName,
   getConnectorCachedItems,
   getPrivateLibraryConfig,
-  type PrivateLibraryItem,
+  getPrivateLibraryConnectorTypeLabel,
+  type PrivateLibraryConnectorType,
   scanConnector,
   toPrivateLibraryErrorMessage,
 } from '@/lib/private-library';
-import {
-  tmdbGetMovieDetail,
-  tmdbGetTvDetail,
-  toTmdbPosterUrl,
-} from '@/lib/tmdb';
 
 export const runtime = 'nodejs';
 
@@ -25,33 +20,41 @@ interface LibraryItemPayload {
   tmdbId?: number;
   mediaType: 'movie' | 'tv';
   poster: string;
-  connectorId: string;
-  connectorType: 'openlist' | 'emby' | 'jellyfin';
   connectorName: string;
+  connectorDisplayName?: string;
   connectorSourceName: string;
-  streamPath: string;
+  connectorId: string;
+  connectorType: PrivateLibraryConnectorType;
   sourceItemId: string;
+  streamPath: string;
   season?: number;
   episode?: number;
   overview?: string;
   genres?: string[];
   libraryName?: string;
+  originalLanguage?: string;
+  tmdbRating?: number;
+  runtimeMinutes?: number;
+  episodeCount?: number;
+  seasonCount?: number;
+  isAnime?: boolean;
+  scannedAt: number;
+  sortKey: number;
 }
 
-interface LibraryCategoryPayload {
-  key: string;
-  label: string;
-  count: number;
+interface ConnectorPayload {
+  id: string;
+  name: string;
+  displayName?: string;
+  type: PrivateLibraryConnectorType;
+  typeLabel: string;
 }
 
-interface MergedLibraryItem extends PrivateLibraryItem {
+interface ErrorPayload {
+  connectorId: string;
   connectorName: string;
-  connectorSourceName: string;
+  error: string;
 }
-
-const DEFAULT_PAGE_SIZE = 24;
-const MAX_PAGE_SIZE = 60;
-const MAX_EXTRA_CATEGORIES = 12;
 
 function parsePositiveInt(
   value: string | null,
@@ -66,183 +69,18 @@ function parsePositiveInt(
   return Math.min(Math.floor(parsed), max);
 }
 
-function normalizeText(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function toSearchHaystack(item: MergedLibraryItem): string {
-  return [
-    item.title,
-    item.overview,
-    item.connectorName,
-    item.connectorSourceName,
-    item.libraryName,
-    ...(item.genres || []),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-}
-
-function toLibraryLabel(value: string): string {
-  const normalized = normalizeText(value);
-  if (normalized === 'movies') {
-    return '电影库';
-  }
-  if (normalized === 'tvshows') {
-    return '剧集库';
-  }
-  return value.trim();
-}
-
-function matchesCategory(item: MergedLibraryItem, category: string): boolean {
-  if (!category || category === 'all') {
-    return true;
-  }
-
-  if (category === 'media:movie') {
-    return item.mediaType === 'movie';
-  }
-
-  if (category === 'media:tv') {
-    return item.mediaType === 'tv';
-  }
-
-  if (category.startsWith('genre:')) {
-    const target = normalizeText(category.slice('genre:'.length));
-    return (item.genres || []).some((genre) => normalizeText(genre) === target);
-  }
-
-  if (category.startsWith('library:')) {
-    const target = normalizeText(category.slice('library:'.length));
-    return normalizeText(item.libraryName || '') === target;
-  }
-
-  return true;
-}
-
-function buildCategories(items: MergedLibraryItem[]): LibraryCategoryPayload[] {
-  const movieCount = items.filter((item) => item.mediaType === 'movie').length;
-  const tvCount = items.filter((item) => item.mediaType === 'tv').length;
-  const categories: LibraryCategoryPayload[] = [
-    { key: 'all', label: '全部', count: items.length },
-    { key: 'media:movie', label: '电影', count: movieCount },
-    { key: 'media:tv', label: '剧集', count: tvCount },
-  ];
-
-  const libraryCounts = new Map<string, number>();
-  for (const item of items) {
-    const label = toLibraryLabel(item.libraryName || '');
-    const normalized = normalizeText(label);
-    if (!label || normalized === '电影库' || normalized === '剧集库') {
-      continue;
-    }
-    libraryCounts.set(label, (libraryCounts.get(label) || 0) + 1);
-  }
-
-  Array.from(libraryCounts.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
-    .slice(0, 4)
-    .forEach(([label, count]) => {
-      categories.push({
-        key: `library:${label}`,
-        label,
-        count,
-      });
-    });
-
-  const genreCounts = new Map<string, number>();
-  for (const item of items) {
-    for (const genre of item.genres || []) {
-      const label = genre.trim();
-      if (!label) {
-        continue;
-      }
-      genreCounts.set(label, (genreCounts.get(label) || 0) + 1);
-    }
-  }
-
-  Array.from(genreCounts.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
-    .slice(0, MAX_EXTRA_CATEGORIES)
-    .forEach(([label, count]) => {
-      categories.push({
-        key: `genre:${label}`,
-        label,
-        count,
-      });
-    });
-
-  return categories.filter((item) => item.count > 0);
-}
-
-function sortItems(items: MergedLibraryItem[]): MergedLibraryItem[] {
+function sortItems(items: LibraryItemPayload[]): LibraryItemPayload[] {
   return [...items].sort((left, right) => {
-    const yearDelta = (right.year || 0) - (left.year || 0);
-    if (yearDelta !== 0) {
-      return yearDelta;
+    if (right.scannedAt !== left.scannedAt) {
+      return right.scannedAt - left.scannedAt;
+    }
+
+    if (left.sortKey !== right.sortKey) {
+      return left.sortKey - right.sortKey;
     }
 
     return left.title.localeCompare(right.title, 'zh-CN');
   });
-}
-
-async function enrichItem(
-  item: MergedLibraryItem,
-): Promise<LibraryItemPayload> {
-  let title = item.title;
-  let poster =
-    item.connectorType === 'openlist'
-      ? ''
-      : buildPrivateLibraryPosterUrl(item.connectorId, item.sourceItemId);
-  let overview = item.overview || '';
-  let genres = item.genres || [];
-
-  if (item.tmdbId) {
-    try {
-      if (item.mediaType === 'movie') {
-        const detail = await tmdbGetMovieDetail(item.tmdbId);
-        title = detail.title || title;
-        poster = toTmdbPosterUrl(detail.poster_path) || poster;
-        overview = detail.overview || overview;
-        genres =
-          genres.length > 0
-            ? genres
-            : (detail.genres || []).map((genre) => genre.name).filter(Boolean);
-      } else {
-        const detail = await tmdbGetTvDetail(item.tmdbId);
-        title = detail.name || title;
-        poster = toTmdbPosterUrl(detail.poster_path) || poster;
-        overview = detail.overview || overview;
-        genres =
-          genres.length > 0
-            ? genres
-            : (detail.genres || []).map((genre) => genre.name).filter(Boolean);
-      }
-    } catch {
-      // TMDB 补充失败时保留已有字段。
-    }
-  }
-
-  return {
-    id: item.id,
-    title,
-    year: item.year,
-    tmdbId: item.tmdbId,
-    mediaType: item.mediaType,
-    poster,
-    connectorId: item.connectorId,
-    connectorType: item.connectorType,
-    connectorName: item.connectorName,
-    connectorSourceName: item.connectorSourceName,
-    streamPath: item.streamPath,
-    sourceItemId: item.sourceItemId,
-    season: item.season,
-    episode: item.episode,
-    overview,
-    genres,
-    libraryName: item.libraryName,
-  };
 }
 
 export async function GET(request: NextRequest) {
@@ -254,31 +92,31 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const connectorIdFilter = (searchParams.get('connectorId') || '').trim();
-    const mediaTypeFilter = (searchParams.get('mediaType') || '').trim();
-    const query = (searchParams.get('q') || '').trim();
-    const category = (searchParams.get('category') || '').trim();
-    const offset = parsePositiveInt(searchParams.get('offset'), 0, 10_000);
-    const limit = parsePositiveInt(
-      searchParams.get('limit'),
-      DEFAULT_PAGE_SIZE,
-      MAX_PAGE_SIZE,
-    );
+    const forceRefresh = searchParams.get('refresh') === '1';
+    const fetchAll = searchParams.get('all') === '1';
+    const offset = parsePositiveInt(searchParams.get('offset'), 0, 20_000);
+    const limit = parsePositiveInt(searchParams.get('limit'), 60, 5_000);
 
     const cfg = await getPrivateLibraryConfig();
     const enabled = cfg.connectors.filter(
       (item) =>
         item.enabled && (!connectorIdFilter || item.id === connectorIdFilter),
     );
-    const merged: MergedLibraryItem[] = [];
-    const errors: Array<{
-      connectorId: string;
-      connectorName: string;
-      error: string;
-    }> = [];
+
+    const merged: LibraryItemPayload[] = [];
+    const connectors: ConnectorPayload[] = [];
+    const errors: ErrorPayload[] = [];
 
     for (const connector of enabled) {
-      let items = getConnectorCachedItems(connector.id);
+      connectors.push({
+        id: connector.id,
+        name: connector.name,
+        displayName: connector.displayName,
+        type: connector.type,
+        typeLabel: getPrivateLibraryConnectorTypeLabel(connector.type),
+      });
 
+      let items = forceRefresh ? [] : getConnectorCachedItems(connector.id);
       if (items.length === 0) {
         try {
           items = await scanConnector(connector);
@@ -294,56 +132,47 @@ export async function GET(request: NextRequest) {
 
       for (const item of items) {
         merged.push({
-          ...item,
+          id: item.id,
+          title: item.title,
+          year: item.year,
+          tmdbId: item.tmdbId,
+          mediaType: item.mediaType,
+          poster: item.poster || '',
+          connectorId: item.connectorId,
+          connectorType: item.connectorType,
           connectorName: connector.name,
+          connectorDisplayName: connector.displayName,
           connectorSourceName: formatPrivateLibrarySourceName(connector),
+          sourceItemId: item.sourceItemId,
+          streamPath: item.streamPath,
+          season: item.season,
+          episode: item.episode,
+          overview: item.overview,
+          genres: item.genres,
+          libraryName: item.libraryName,
+          originalLanguage: item.originalLanguage,
+          tmdbRating: item.tmdbRating,
+          runtimeMinutes: item.runtimeMinutes,
+          episodeCount: item.episodeCount,
+          seasonCount: item.seasonCount,
+          isAnime: item.isAnime,
+          scannedAt: item.scannedAt,
+          sortKey: item.sortKey,
         });
       }
     }
 
-    const normalizedQuery = normalizeText(query);
-    const queryFiltered = sortItems(
-      merged.filter((item) => {
-        if (
-          mediaTypeFilter &&
-          mediaTypeFilter !== 'all' &&
-          item.mediaType !== mediaTypeFilter
-        ) {
-          return false;
-        }
-
-        if (
-          normalizedQuery &&
-          !toSearchHaystack(item).includes(normalizedQuery)
-        ) {
-          return false;
-        }
-
-        return true;
-      }),
-    );
-
-    const categories = buildCategories(queryFiltered);
-    const activeCategory =
-      category ||
-      (mediaTypeFilter && mediaTypeFilter !== 'all'
-        ? `media:${mediaTypeFilter}`
-        : 'all');
-    const filtered = queryFiltered.filter((item) =>
-      matchesCategory(item, activeCategory),
-    );
-
-    const pageItems = filtered.slice(offset, offset + limit);
-    const items = await Promise.all(pageItems.map((item) => enrichItem(item)));
+    const sorted = sortItems(merged);
+    const items = fetchAll ? sorted : sorted.slice(offset, offset + limit);
 
     return NextResponse.json({
       items,
-      categories,
+      connectors,
       pagination: {
-        total: filtered.length,
+        total: sorted.length,
         offset,
-        limit,
-        hasMore: offset + items.length < filtered.length,
+        limit: fetchAll ? sorted.length : limit,
+        hasMore: fetchAll ? false : offset + items.length < sorted.length,
         nextOffset: offset + items.length,
       },
       ...(errors.length > 0 ? { errors } : {}),

@@ -3,7 +3,11 @@ import type {
   PrivateLibraryConnector,
 } from './admin.types';
 
-export type PrivateLibraryConnectorType = 'openlist' | 'emby' | 'jellyfin';
+export type PrivateLibraryConnectorType =
+  | 'openlist'
+  | 'emby'
+  | 'jellyfin'
+  | 'xiaoya';
 
 function normalizeUrl(value: string): string {
   return value.trim().replace(/\/+$/, '');
@@ -14,7 +18,10 @@ function sanitizeString(value: unknown): string {
 }
 
 function sanitizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
   return value
     .map((item) => sanitizeString(item))
     .filter(Boolean)
@@ -23,6 +30,25 @@ function sanitizeStringArray(value: unknown): string[] {
 
 function createConnectorId(type: PrivateLibraryConnectorType): string {
   return `${type}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function getDefaultConnectorName(type: PrivateLibraryConnectorType): string {
+  switch (type) {
+    case 'xiaoya':
+      return '我的小雅';
+    case 'openlist':
+      return '我的 OpenList';
+    case 'emby':
+      return '我的 Emby';
+    case 'jellyfin':
+      return '我的 Jellyfin';
+    default:
+      return '我的影库';
+  }
+}
+
+function getDefaultRootPath(type: PrivateLibraryConnectorType): string {
+  return type === 'xiaoya' ? '/' : '/Media';
 }
 
 export function normalizePrivateLibraryConfig(
@@ -40,27 +66,38 @@ export function normalizePrivateLibraryConfig(
   const now = Date.now();
   const connectors = raw.connectors
     .map((item) => {
-      if (!item || typeof item !== 'object') return null;
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
 
       const c = item as Partial<PrivateLibraryConnector>;
       const type = c.type;
-      if (type !== 'openlist' && type !== 'emby' && type !== 'jellyfin') {
+      if (
+        type !== 'openlist' &&
+        type !== 'emby' &&
+        type !== 'jellyfin' &&
+        type !== 'xiaoya'
+      ) {
         return null;
       }
 
       const serverUrl = normalizeUrl(sanitizeString(c.serverUrl));
-      if (!serverUrl) return null;
+      if (!serverUrl) {
+        return null;
+      }
 
       return {
         id: sanitizeString(c.id) || createConnectorId(type),
-        name: sanitizeString(c.name) || `我的${type}`,
+        name: sanitizeString(c.name) || getDefaultConnectorName(type),
+        displayName: sanitizeString(c.displayName),
         type,
         enabled: c.enabled !== false,
         serverUrl,
         token: sanitizeString(c.token),
+        alistToken: '',
         username: sanitizeString(c.username),
         password: sanitizeString(c.password),
-        rootPath: sanitizeString(c.rootPath) || '/Media',
+        rootPath: sanitizeString(c.rootPath) || getDefaultRootPath(type),
         userId: sanitizeString(c.userId),
         libraryFilter: sanitizeStringArray(c.libraryFilter),
         createdAt:

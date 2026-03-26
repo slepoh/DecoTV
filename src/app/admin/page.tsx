@@ -8466,10 +8466,12 @@ interface PrivateLibraryConfigPanelProps {
 const createEmptyConnector = (): PrivateLibraryConnector => ({
   id: `pl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
   name: '新连接',
+  displayName: '',
   type: 'emby',
   enabled: true,
   serverUrl: '',
   token: '',
+  alistToken: '',
   username: '',
   password: '',
   rootPath: '/Media',
@@ -8498,6 +8500,7 @@ function validatePrivateConnector(
   connector: PrivateLibraryConnector,
 ): string | null {
   const name = connector.name.trim() || '未命名连接';
+  const displayName = connector.displayName?.trim() || '';
   const serverUrl = connector.serverUrl.trim();
   const token = connector.token.trim();
   const hasAccountPassword = Boolean(
@@ -8512,10 +8515,18 @@ function validatePrivateConnector(
     return `${name}：服务器地址格式不正确`;
   }
 
+  if (displayName.length > 32) {
+    return `${name}：显示名称不能超过 32 个字符`;
+  }
+
   if (connector.type === 'openlist') {
     if (!token && !hasAccountPassword) {
       return `${name}：OpenList 需要填写 Token，或填写用户名和密码`;
     }
+    return null;
+  }
+
+  if (connector.type === 'xiaoya') {
     return null;
   }
 
@@ -8771,7 +8782,7 @@ const PrivateLibraryConfigPanel = ({
             私人影库连接
           </p>
           <p className='text-xs text-blue-700 dark:text-blue-300 mt-1'>
-            支持 OpenList / Emby / Jellyfin，最多 3 个连接
+            支持 OpenList / 小雅 Alist / Emby / Jellyfin，最多 3 个连接
           </p>
         </div>
         <div className='flex items-center gap-2'>
@@ -8865,16 +8876,33 @@ const PrivateLibraryConfigPanel = ({
               className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
             />
 
+            <input
+              type='text'
+              value={connector.displayName || ''}
+              onChange={(event) =>
+                patchConnector(connector.id, {
+                  displayName: event.target.value,
+                })
+              }
+              placeholder='显示名称（前端来源标签使用，可选）'
+              className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+            />
+
             <select
               value={connector.type}
               onChange={(event) =>
                 patchConnector(connector.id, {
                   type: event.target.value as PrivateLibraryConnector['type'],
+                  rootPath:
+                    event.target.value === 'xiaoya'
+                      ? '/'
+                      : connector.rootPath || '/Media',
                 })
               }
               className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
             >
               <option value='openlist'>OpenList</option>
+              <option value='xiaoya'>小雅 Alist</option>
               <option value='emby'>Emby</option>
               <option value='jellyfin'>Jellyfin</option>
             </select>
@@ -8889,51 +8917,81 @@ const PrivateLibraryConfigPanel = ({
               className='md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
             />
 
-            <input
-              type='text'
-              value={connector.token}
-              onChange={(event) =>
-                patchConnector(connector.id, { token: event.target.value })
-              }
-              placeholder='Token / API Key（可选）'
-              className='md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm font-mono'
-            />
+            {connector.type !== 'xiaoya' ? (
+              <input
+                type='text'
+                value={connector.token}
+                onChange={(event) =>
+                  patchConnector(connector.id, { token: event.target.value })
+                }
+                placeholder='Token / API Key（可选）'
+                className='md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm font-mono'
+              />
+            ) : null}
 
             <div className='md:col-span-2 text-xs text-gray-500 dark:text-gray-400'>
               {connector.type === 'openlist'
                 ? 'OpenList 可使用 Token，部分部署也可尝试用户名 + 密码；服务地址里直接填写端口。'
-                : 'Emby / Jellyfin 现已支持两种方式：API Key / Access Token，或用户名 + 密码登录。服务地址里直接填写端口，如 http://host:8096。UserId 仅用于播放进度回写，不填会尽量自动解析。'}
+                : connector.type === 'xiaoya'
+                  ? '小雅 Alist 兼容 Alist API。可留空密码直接访问；如实例开启了访问密码，服务端会先登录并缓存 token。播放 .strm 文件时会实时刷新阿里云盘直链。'
+                  : 'Emby / Jellyfin 现已支持两种方式：API Key / Access Token，或用户名 + 密码登录。服务地址里直接填写端口，如 http://host:8096。UserId 仅用于播放进度回写，不填会尽量自动解析。'}
             </div>
 
-            <input
-              type='text'
-              value={connector.username || ''}
-              onChange={(event) =>
-                patchConnector(connector.id, { username: event.target.value })
-              }
-              placeholder='用户名（选填）'
-              className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
-            />
-            <input
-              type='password'
-              value={connector.password || ''}
-              onChange={(event) =>
-                patchConnector(connector.id, { password: event.target.value })
-              }
-              placeholder='密码（选填）'
-              className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
-            />
+            {connector.type === 'xiaoya' ? (
+              <input
+                type='password'
+                value={connector.password || ''}
+                onChange={(event) =>
+                  patchConnector(connector.id, {
+                    password: event.target.value,
+                  })
+                }
+                placeholder='访问密码（可选）'
+                className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+              />
+            ) : (
+              <>
+                <input
+                  type='text'
+                  value={connector.username || ''}
+                  onChange={(event) =>
+                    patchConnector(connector.id, {
+                      username: event.target.value,
+                    })
+                  }
+                  placeholder='用户名（选填）'
+                  className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+                />
+                <input
+                  type='password'
+                  value={connector.password || ''}
+                  onChange={(event) =>
+                    patchConnector(connector.id, {
+                      password: event.target.value,
+                    })
+                  }
+                  placeholder='密码（选填）'
+                  className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
+                />
+              </>
+            )}
 
-            {connector.type === 'openlist' ? (
+            {connector.type === 'openlist' || connector.type === 'xiaoya' ? (
               <input
                 type='text'
                 value={connector.rootPath || ''}
                 onChange={(event) =>
                   patchConnector(connector.id, {
-                    rootPath: event.target.value || '/Media',
+                    rootPath:
+                      event.target.value ||
+                      (connector.type === 'xiaoya' ? '/' : '/Media'),
                   })
                 }
-                placeholder='OpenList 根目录，例如 /Media'
+                placeholder={
+                  connector.type === 'xiaoya'
+                    ? '小雅根目录，例如 /电影'
+                    : 'OpenList 根目录，例如 /Media'
+                }
                 className='px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm md:col-span-2'
               />
             ) : (

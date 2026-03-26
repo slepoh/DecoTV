@@ -12,11 +12,6 @@ import {
   scanConnector,
   toPrivateLibraryErrorMessage,
 } from '@/lib/private-library';
-import {
-  tmdbGetMovieDetail,
-  tmdbGetTvDetail,
-  toTmdbPosterUrl,
-} from '@/lib/tmdb';
 import { SearchResult } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -73,33 +68,16 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        let title = target.title;
-        let poster =
-          connector.type === 'openlist'
-            ? ''
-            : buildPrivateLibraryPosterUrl(
+        const title = target.title;
+        const poster =
+          target.poster ||
+          (connector.type === 'emby' || connector.type === 'jellyfin'
+            ? buildPrivateLibraryPosterUrl(
                 target.connectorId,
                 target.sourceItemId,
-              );
-        let desc = target.overview || '';
-
-        if (target.tmdbId) {
-          try {
-            if (target.mediaType === 'movie') {
-              const detail = await tmdbGetMovieDetail(target.tmdbId);
-              title = detail.title || title;
-              poster = toTmdbPosterUrl(detail.poster_path);
-              desc = detail.overview || '';
-            } else {
-              const detail = await tmdbGetTvDetail(target.tmdbId);
-              title = detail.name || title;
-              poster = toTmdbPosterUrl(detail.poster_path);
-              desc = detail.overview || '';
-            }
-          } catch {
-            // TMDB 失败时保留基础文件信息。
-          }
-        }
+              )
+            : '');
+        const desc = target.overview || '';
 
         const streamUrl = `/api/private-library/stream?connectorId=${encodeURIComponent(target.connectorId)}&sourceItemId=${encodeURIComponent(target.sourceItemId)}`;
         let privateAudioStreams: Awaited<
