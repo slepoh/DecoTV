@@ -6,7 +6,7 @@
 import Artplayer from 'artplayer';
 import artplayerPluginDanmuku from 'artplayer-plugin-danmuku';
 import Hls from 'hls.js';
-import { Download, Heart } from 'lucide-react';
+import { Download, Heart, LoaderCircle } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
@@ -29,7 +29,7 @@ import { generateCacheKey, globalCache } from '@/lib/unified-cache';
 import { getVideoResolutionFromM3u8 } from '@/lib/utils';
 import { isIOSPlatform, useCast } from '@/hooks/useCast';
 import { type DanmuItem, useDanmu } from '@/hooks/useDanmu';
-import { useDoubanInfo } from '@/hooks/useDoubanInfo';
+import { type DoubanCelebrity, useDoubanInfo } from '@/hooks/useDoubanInfo';
 
 import type {
   DanmuManualMatchModalProps,
@@ -4021,6 +4021,192 @@ function isMetadataTitleMatch(source: string, target: string): boolean {
   );
 }
 
+interface TmdbSupplementDetail {
+  title: string;
+  originalTitle?: string;
+  overview?: string;
+  tagline?: string;
+  rating?: number;
+  releaseDate?: string;
+  status?: string;
+  genres: string[];
+  countries: string[];
+  languages: string[];
+  year?: string;
+  durations: string[];
+  seasons?: number;
+  episodes?: number;
+  directors: DoubanCelebrity[];
+  casts: DoubanCelebrity[];
+}
+
+function buildTmdbImageProxyUrl(
+  path?: string | null,
+  size = 'w185',
+): string | undefined {
+  if (!path) {
+    return undefined;
+  }
+
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const rawUrl = `https://image.tmdb.org/t/p/${size}${normalizedPath}`;
+  return `/api/image-proxy?url=${encodeURIComponent(rawUrl)}`;
+}
+
+function mapTmdbCelebrity(
+  id: number,
+  name: string,
+  profilePath?: string | null,
+  roles?: string[],
+): DoubanCelebrity {
+  return {
+    id: String(id),
+    name,
+    avatars: profilePath
+      ? {
+          small: buildTmdbImageProxyUrl(profilePath, 'w92') || '',
+          medium: buildTmdbImageProxyUrl(profilePath, 'w185') || '',
+          large: buildTmdbImageProxyUrl(profilePath, 'w300') || '',
+        }
+      : undefined,
+    roles,
+  };
+}
+
+function TmdbSupplementPanel({
+  detail,
+  loading,
+}: {
+  detail: TmdbSupplementDetail | null;
+  loading: boolean;
+}) {
+  if (!detail && !loading) {
+    return null;
+  }
+
+  const metaItems = detail
+    ? [
+        { label: 'TMDB 标题', value: detail.title || '' },
+        {
+          label: 'TMDB 评分',
+          value: detail.rating ? detail.rating.toFixed(1) : '',
+        },
+        { label: '上映 / 首播', value: detail.releaseDate || '' },
+        { label: '状态', value: detail.status || '' },
+        { label: '原始标题', value: detail.originalTitle || '' },
+        { label: '语言', value: detail.languages.join(' / ') },
+        { label: '国家 / 地区', value: detail.countries.join(' / ') },
+        { label: '时长 / 规模', value: detail.durations.join(' / ') },
+        { label: '类型', value: detail.genres.join(' / ') },
+      ].filter((item) => item.value)
+    : [];
+
+  return (
+    <section className='rounded-2xl border border-white/10 bg-gray-50/95 p-4 shadow-sm dark:bg-gray-900/70 sm:p-5'>
+      <div className='flex items-center justify-between gap-3'>
+        <div>
+          <h3 className='text-base font-semibold text-gray-900 dark:text-gray-100'>
+            TMDB 补充信息
+          </h3>
+          <p className='mt-1 text-sm text-gray-500 dark:text-gray-400'>
+            显示来自 TMDB
+            的补充简介与更完整的国际元数据，适合欧美、日韩、动漫和私人影库内容。
+          </p>
+        </div>
+        {loading ? (
+          <span className='inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400'>
+            <LoaderCircle className='h-4 w-4 animate-spin' />
+            正在读取 TMDB 详情...
+          </span>
+        ) : null}
+      </div>
+
+      {detail ? (
+        <div className='mt-4 space-y-4'>
+          {detail.tagline ? (
+            <div className='rounded-xl border border-sky-200/60 bg-sky-50/80 px-4 py-3 text-sm text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100'>
+              {detail.tagline}
+            </div>
+          ) : null}
+
+          {metaItems.length > 0 ? (
+            <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
+              {metaItems.map((item) => (
+                <div
+                  key={item.label}
+                  className='rounded-xl border border-gray-200/80 bg-white/80 px-4 py-3 dark:border-gray-800 dark:bg-gray-950/40'
+                >
+                  <div className='text-xs text-gray-500 dark:text-gray-400'>
+                    {item.label}
+                  </div>
+                  <div className='mt-1 text-sm font-medium text-gray-900 dark:text-gray-100'>
+                    {item.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {detail.directors.length > 0 || detail.casts.length > 0 ? (
+            <div className='rounded-xl border border-gray-200/80 bg-white/80 px-4 py-4 dark:border-gray-800 dark:bg-gray-950/40'>
+              {detail.directors.length > 0 ? (
+                <div>
+                  <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+                    TMDB 导演
+                  </div>
+                  <div className='mt-2 flex flex-wrap gap-2'>
+                    {detail.directors.map((person) => (
+                      <span
+                        key={`director-${person.id}`}
+                        className='inline-flex items-center rounded-full border border-gray-200 bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                      >
+                        {person.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {detail.casts.length > 0 ? (
+                <div className={detail.directors.length > 0 ? 'mt-4' : ''}>
+                  <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+                    TMDB 主演
+                  </div>
+                  <div className='mt-2 flex flex-wrap gap-2'>
+                    {detail.casts.slice(0, 10).map((person) => (
+                      <span
+                        key={`cast-${person.id}`}
+                        className='inline-flex items-center rounded-full border border-gray-200 bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                      >
+                        {person.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {detail.overview ? (
+            <div className='rounded-xl border border-gray-200/80 bg-white/80 px-4 py-4 dark:border-gray-800 dark:bg-gray-950/40'>
+              <div className='mb-2 text-sm font-medium text-gray-900 dark:text-gray-100'>
+                TMDB 版影片介绍
+              </div>
+              <p className='whitespace-pre-wrap text-sm leading-7 text-gray-600 dark:text-gray-300'>
+                {detail.overview}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : loading ? (
+        <div className='mt-4 rounded-xl border border-dashed border-gray-300 bg-white/60 px-4 py-6 text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-950/40 dark:text-gray-400'>
+          正在拉取 TMDB 元数据...
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 const DoubanInfoSection = ({
   doubanId: initialDoubanId,
   tmdbId: initialTmdbId,
@@ -4044,13 +4230,9 @@ const DoubanInfoSection = ({
   const [tmdbType, setTmdbType] = useState<'movie' | 'tv'>('movie');
   const [tmdbEnabled, setTmdbEnabled] = useState(false);
   const [tmdbLoading, setTmdbLoading] = useState(false);
-  const [tmdbDetail, setTmdbDetail] = useState<{
-    overview?: string;
-    genres?: string[];
-    countries?: string[];
-    year?: string;
-    durations?: string[];
-  } | null>(null);
+  const [tmdbDetail, setTmdbDetail] = useState<TmdbSupplementDetail | null>(
+    null,
+  );
 
   useEffect(() => {
     const doubanIdCacheKey = generateCacheKey('douban-resolved-id', {
@@ -4223,31 +4405,77 @@ const DoubanInfoSection = ({
       return;
     }
 
+    let cancelled = false;
+
     const fetchTmdbDetail = async () => {
       setTmdbLoading(true);
       try {
-        const response = await fetch(
-          `/api/tmdb?action=detail&type=${tmdbType}&id=${resolvedTmdbId}`,
-        );
-        if (!response.ok) {
-          setTmdbDetail(null);
+        const [detailResponse, creditsResponse] = await Promise.all([
+          fetch(
+            `/api/tmdb?action=detail&type=${tmdbType}&id=${resolvedTmdbId}`,
+          ),
+          fetch(
+            `/api/tmdb?action=credits&type=${tmdbType}&id=${resolvedTmdbId}`,
+          ),
+        ]);
+
+        if (!detailResponse.ok) {
+          if (!cancelled) {
+            setTmdbDetail(null);
+          }
           return;
         }
 
-        const data = (await response.json()) as {
+        const data = (await detailResponse.json()) as {
+          title?: string;
+          name?: string;
+          original_title?: string;
+          original_name?: string;
           overview?: string;
+          tagline?: string;
+          vote_average?: number;
           genres?: Array<{ name: string }>;
           production_countries?: Array<{ name: string }>;
+          spoken_languages?: Array<{ name: string }>;
           release_date?: string;
           first_air_date?: string;
           runtime?: number;
+          episode_run_time?: number[];
           number_of_seasons?: number;
           number_of_episodes?: number;
+          status?: string;
         };
+        const credits = creditsResponse.ok
+          ? ((await creditsResponse.json()) as {
+              cast?: Array<{
+                id: number;
+                name?: string;
+                character?: string;
+                profile_path?: string | null;
+              }>;
+              crew?: Array<{
+                id: number;
+                name?: string;
+                job?: string;
+                department?: string;
+                profile_path?: string | null;
+              }>;
+            })
+          : null;
 
         const durations: string[] = [];
         if (typeof data.runtime === 'number' && data.runtime > 0) {
           durations.push(`${data.runtime} 分钟`);
+        }
+        if (
+          Array.isArray(data.episode_run_time) &&
+          data.episode_run_time.length > 0
+        ) {
+          durations.push(
+            ...data.episode_run_time
+              .filter((item) => typeof item === 'number' && item > 0)
+              .map((item) => `${item} 分钟 / 集`),
+          );
         }
         if (
           typeof data.number_of_seasons === 'number' &&
@@ -4262,22 +4490,83 @@ const DoubanInfoSection = ({
           durations.push(`${data.number_of_episodes} 集`);
         }
 
+        const directors =
+          credits?.crew
+            ?.filter(
+              (item) =>
+                Boolean(item.name) &&
+                (item.job === 'Director' ||
+                  item.job === 'Series Director' ||
+                  item.department === 'Directing'),
+            )
+            .slice(0, 8)
+            .map((item) =>
+              mapTmdbCelebrity(
+                item.id,
+                item.name || '',
+                item.profile_path,
+                item.job ? [item.job] : ['导演'],
+              ),
+            ) || [];
+        const casts =
+          credits?.cast
+            ?.filter((item) => Boolean(item.name))
+            .slice(0, 16)
+            .map((item) =>
+              mapTmdbCelebrity(
+                item.id,
+                item.name || '',
+                item.profile_path,
+                item.character ? [item.character] : ['演员'],
+              ),
+            ) || [];
+
+        if (cancelled) {
+          return;
+        }
+
         setTmdbDetail({
+          title: data.title || data.name || title,
+          originalTitle:
+            data.original_title?.trim() || data.original_name?.trim() || '',
           overview: data.overview?.trim() || '',
+          tagline: data.tagline?.trim() || '',
+          rating:
+            typeof data.vote_average === 'number' && data.vote_average > 0
+              ? data.vote_average
+              : undefined,
+          releaseDate: data.release_date || data.first_air_date || '',
+          status: data.status?.trim() || '',
           genres: (data.genres || []).map((item) => item.name).filter(Boolean),
           countries: (data.production_countries || [])
             .map((item) => item.name)
             .filter(Boolean),
+          languages: (data.spoken_languages || [])
+            .map((item) => item.name)
+            .filter(Boolean),
           year: extractMetadataYear(data.release_date || data.first_air_date),
-          durations,
+          durations: Array.from(new Set(durations)),
+          seasons: data.number_of_seasons,
+          episodes: data.number_of_episodes,
+          directors,
+          casts,
         });
+      } catch {
+        if (!cancelled) {
+          setTmdbDetail(null);
+        }
       } finally {
-        setTmdbLoading(false);
+        if (!cancelled) {
+          setTmdbLoading(false);
+        }
       }
     };
 
     void fetchTmdbDetail();
-  }, [resolvedTmdbId, tmdbEnabled, tmdbType]);
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedTmdbId, title, tmdbEnabled, tmdbType]);
 
   const {
     detail: doubanDetail,
@@ -4296,6 +4585,9 @@ const DoubanInfoSection = ({
     if (doubanDetail) {
       return {
         ...doubanDetail,
+        title: doubanDetail.title || tmdbDetail?.title || title,
+        original_title:
+          doubanDetail.original_title || tmdbDetail?.originalTitle || '',
         genres:
           doubanDetail.genres && doubanDetail.genres.length > 0
             ? doubanDetail.genres
@@ -4308,20 +4600,37 @@ const DoubanInfoSection = ({
           doubanDetail.durations && doubanDetail.durations.length > 0
             ? doubanDetail.durations
             : tmdbDetail?.durations,
+        directors:
+          doubanDetail.directors && doubanDetail.directors.length > 0
+            ? doubanDetail.directors
+            : tmdbDetail?.directors,
+        casts:
+          doubanDetail.casts && doubanDetail.casts.length > 0
+            ? doubanDetail.casts
+            : tmdbDetail?.casts,
         summary: primarySummary || fallbackSummary || tmdbSummary,
       };
     }
 
     return {
       id: String(resolvedTmdbId || title || 'fallback'),
-      title,
+      title: tmdbDetail?.title || title,
+      original_title: tmdbDetail?.originalTitle || '',
       year: tmdbDetail?.year || normalizedYear || year,
       summary: fallbackSummary || tmdbSummary,
       genres: tmdbDetail?.genres || [],
       countries: tmdbDetail?.countries || [],
       durations: tmdbDetail?.durations || [],
-      directors: [],
-      casts: [],
+      directors: tmdbDetail?.directors || [],
+      casts: tmdbDetail?.casts || [],
+      rating: tmdbDetail?.rating
+        ? {
+            max: 10,
+            average: tmdbDetail.rating,
+            stars: '',
+            min: 0,
+          }
+        : undefined,
     };
   }, [
     doubanDetail,
@@ -4335,13 +4644,20 @@ const DoubanInfoSection = ({
     year,
   ]);
 
-  const primarySummaryLabel = primarySummary ? '豆瓣简介' : '简介';
+  const primarySummaryLabel = primarySummary
+    ? '豆瓣简介'
+    : tmdbSummary && !fallbackSummary
+      ? 'TMDB 简介'
+      : '简介';
   const secondarySummary =
-    tmdbSummary && tmdbSummary !== mergedDetail.summary
+    tmdbSummary && tmdbSummary !== (primarySummary || fallbackSummary || '')
       ? tmdbSummary
       : undefined;
   const showMetaLoading =
-    detailLoading && !primarySummary && !fallbackSummary && !tmdbSummary;
+    (detailLoading || tmdbLoading) &&
+    !primarySummary &&
+    !fallbackSummary &&
+    !tmdbSummary;
 
   if (!title && !mergedDetail.summary && !tmdbLoading && !detailLoading) {
     return null;
@@ -4360,6 +4676,8 @@ const DoubanInfoSection = ({
         secondarySummaryLabel='TMDB 简介'
         secondarySummaryLoading={tmdbLoading && !secondarySummary}
       />
+
+      <TmdbSupplementPanel detail={tmdbDetail} loading={tmdbLoading} />
 
       {resolvedDoubanId > 0 ? (
         <>

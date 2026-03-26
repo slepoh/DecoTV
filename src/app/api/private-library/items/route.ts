@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { verifyApiAuth } from '@/lib/auth';
 import {
+  formatPrivateLibrarySourceName,
   getConnectorCachedItems,
   getPrivateLibraryConfig,
   scanConnector,
@@ -23,7 +24,9 @@ interface LibraryItemPayload {
   mediaType: 'movie' | 'tv';
   poster: string;
   connectorId: string;
+  connectorType: 'openlist' | 'emby' | 'jellyfin';
   connectorName: string;
+  connectorSourceName: string;
   streamPath: string;
   sourceItemId: string;
   season?: number;
@@ -38,8 +41,14 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const { searchParams } = new URL(request.url);
+    const connectorIdFilter = (searchParams.get('connectorId') || '').trim();
+    const mediaTypeFilter = (searchParams.get('mediaType') || '').trim();
     const cfg = await getPrivateLibraryConfig();
-    const enabled = cfg.connectors.filter((item) => item.enabled);
+    const enabled = cfg.connectors.filter(
+      (item) =>
+        item.enabled && (!connectorIdFilter || item.id === connectorIdFilter),
+    );
     const merged: LibraryItemPayload[] = [];
     const errors: Array<{
       connectorId: string;
@@ -64,6 +73,14 @@ export async function GET(request: NextRequest) {
       }
 
       for (const item of items) {
+        if (
+          mediaTypeFilter &&
+          mediaTypeFilter !== 'all' &&
+          item.mediaType !== mediaTypeFilter
+        ) {
+          continue;
+        }
+
         let title = item.title;
         let poster = '';
         let overview = '';
@@ -94,7 +111,9 @@ export async function GET(request: NextRequest) {
           mediaType: item.mediaType,
           poster,
           connectorId: connector.id,
+          connectorType: connector.type,
           connectorName: connector.name,
+          connectorSourceName: formatPrivateLibrarySourceName(connector),
           streamPath: item.streamPath,
           sourceItemId: item.sourceItemId,
           season: item.season,

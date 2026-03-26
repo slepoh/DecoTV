@@ -28,6 +28,31 @@ function parseDoubanId(value: unknown): number | undefined {
   return parsed;
 }
 
+interface PrivateSourceConnector {
+  id: string;
+  name: string;
+  type: 'openlist' | 'emby' | 'jellyfin';
+  typeLabel: string;
+}
+
+interface PrivateLibraryBrowseItem {
+  id: string;
+  title: string;
+  year?: number;
+  tmdbId?: number;
+  mediaType: 'movie' | 'tv';
+  poster: string;
+  connectorId: string;
+  connectorType: 'openlist' | 'emby' | 'jellyfin';
+  connectorName: string;
+  connectorSourceName: string;
+  streamPath: string;
+  sourceItemId: string;
+  season?: number;
+  episode?: number;
+  overview?: string;
+}
+
 function SourceBrowserPageClient() {
   const {
     sources,
@@ -41,6 +66,27 @@ function SourceBrowserPageClient() {
   const [keyword, setKeyword] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  const [privateSources, setPrivateSources] = useState<
+    PrivateSourceConnector[]
+  >([]);
+  const [privateSourceLoading, setPrivateSourceLoading] = useState(false);
+  const [privateSourceError, setPrivateSourceError] = useState<string | null>(
+    null,
+  );
+  const [selectedPrivateSourceId, setSelectedPrivateSourceId] = useState('');
+  const [privateMediaType, setPrivateMediaType] = useState<
+    'all' | 'movie' | 'tv'
+  >('all');
+  const [privateItems, setPrivateItems] = useState<PrivateLibraryBrowseItem[]>(
+    [],
+  );
+  const [privateItemsLoading, setPrivateItemsLoading] = useState(false);
+  const [privateItemsError, setPrivateItemsError] = useState<string | null>(
+    null,
+  );
+  const [privateItemsWarnings, setPrivateItemsWarnings] = useState<string[]>(
+    [],
+  );
 
   const normalizedKeyword = keyword.trim().toLowerCase();
   const filteredSources = useMemo(() => {
@@ -115,6 +161,62 @@ function SourceBrowserPageClient() {
   }, [currentSource]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadPrivateSources = async () => {
+      setPrivateSourceLoading(true);
+      setPrivateSourceError(null);
+      try {
+        const response = await fetch('/api/private-library/status');
+        if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error('登录后才能浏览私人影库源。');
+          }
+          throw new Error('私人影库状态读取失败。');
+        }
+
+        const payload = (await response.json()) as {
+          enabled?: boolean;
+          connectors?: PrivateSourceConnector[];
+        };
+
+        if (cancelled) {
+          return;
+        }
+
+        const connectors = payload.connectors || [];
+        setPrivateSources(connectors);
+        setSelectedPrivateSourceId((current) => {
+          if (current && connectors.some((item) => item.id === current)) {
+            return current;
+          }
+          return connectors[0]?.id || '';
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setPrivateSources([]);
+        setSelectedPrivateSourceId('');
+        setPrivateSourceError(
+          error instanceof Error ? error.message : '私人影库状态读取失败。',
+        );
+      } finally {
+        if (!cancelled) {
+          setPrivateSourceLoading(false);
+        }
+      }
+    };
+
+    void loadPrivateSources();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (currentSource === 'auto' || sourceCategories.length === 0) {
       setSelectedCategoryId('');
       return;
@@ -156,6 +258,80 @@ function SourceBrowserPageClient() {
     categoryItems.length,
     handleLoadMore,
   ]);
+
+  useEffect(() => {
+    if (!selectedPrivateSourceId) {
+      setPrivateItems([]);
+      setPrivateItemsWarnings([]);
+      setPrivateItemsError(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadPrivateItems = async () => {
+      setPrivateItemsLoading(true);
+      setPrivateItemsError(null);
+      setPrivateItemsWarnings([]);
+
+      try {
+        const query = new URLSearchParams();
+        query.set('connectorId', selectedPrivateSourceId);
+        query.set('mediaType', privateMediaType);
+
+        const response = await fetch(
+          `/api/private-library/items?${query.toString()}`,
+        );
+        const payload = (await response.json()) as {
+          items?: PrivateLibraryBrowseItem[];
+          errors?: Array<{
+            connectorId: string;
+            connectorName: string;
+            error: string;
+          }>;
+          error?: string;
+          details?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(
+            payload.details || payload.error || '私人影库资源读取失败。',
+          );
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setPrivateItems(payload.items || []);
+        setPrivateItemsWarnings(
+          (payload.errors || []).map(
+            (item) =>
+              `${item.connectorName || item.connectorId}：${item.error}`,
+          ),
+        );
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setPrivateItems([]);
+        setPrivateItemsError(
+          error instanceof Error ? error.message : '私人影库资源读取失败。',
+        );
+      } finally {
+        if (!cancelled) {
+          setPrivateItemsLoading(false);
+        }
+      }
+    };
+
+    void loadPrivateItems();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [privateMediaType, selectedPrivateSourceId]);
 
   return (
     <PageLayout activePath='/source-browser'>
@@ -244,6 +420,142 @@ function SourceBrowserPageClient() {
                 );
               })}
             </div>
+          </section>
+
+          <section className='rounded-2xl border border-white/10 bg-slate-900/88 p-4 sm:p-5'>
+            <div className='flex flex-wrap items-center justify-between gap-3'>
+              <div>
+                <h3 className='text-sm font-semibold text-slate-200'>
+                  私人影库源
+                </h3>
+                <p className='mt-1 text-xs text-slate-400'>
+                  在这里可以直接浏览 OpenList、Emby、Jellyfin
+                  已接入的私人影库资源，并以对应连接类型作为视频源进入播放页。
+                </p>
+              </div>
+              {selectedPrivateSourceId ? (
+                <span className='inline-flex items-center gap-1 text-xs text-emerald-200'>
+                  <CheckCircle2 className='h-4 w-4' />
+                  当前私库源：
+                  {privateSources.find(
+                    (item) => item.id === selectedPrivateSourceId,
+                  )?.typeLabel || '私人影库'}
+                </span>
+              ) : null}
+            </div>
+
+            {privateSourceLoading ? (
+              <div className='mt-4 flex items-center gap-2 text-sm text-slate-300'>
+                <Loader2 className='h-4 w-4 animate-spin' />
+                正在读取私人影库配置...
+              </div>
+            ) : privateSourceError ? (
+              <div className='mt-4 rounded-xl border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200'>
+                {privateSourceError}
+              </div>
+            ) : privateSources.length === 0 ? (
+              <div className='mt-4 rounded-xl border border-dashed border-slate-600/70 bg-slate-800/35 px-4 py-6 text-sm text-slate-300'>
+                当前还没有可用的私人影库连接，先到后台配置 OpenList / Emby /
+                Jellyfin 后再回来浏览。
+              </div>
+            ) : (
+              <>
+                <div className='mt-3 flex flex-wrap gap-2'>
+                  {privateSources.map((connector) => {
+                    const active = connector.id === selectedPrivateSourceId;
+                    return (
+                      <button
+                        key={connector.id}
+                        type='button'
+                        onClick={() => setSelectedPrivateSourceId(connector.id)}
+                        className={`rounded-xl border px-3 py-1.5 text-sm transition-all ${
+                          active
+                            ? 'border-emerald-300/60 bg-emerald-500/20 text-emerald-200'
+                            : 'border-slate-600/70 bg-slate-800/50 text-slate-200 hover:border-emerald-400/50'
+                        }`}
+                      >
+                        {connector.typeLabel} · {connector.name}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className='mt-3 flex flex-wrap gap-2'>
+                  {[
+                    { key: 'all', label: '全部' },
+                    { key: 'movie', label: '电影' },
+                    { key: 'tv', label: '剧集' },
+                  ].map((option) => {
+                    const active = privateMediaType === option.key;
+                    return (
+                      <button
+                        key={option.key}
+                        type='button'
+                        onClick={() =>
+                          setPrivateMediaType(
+                            option.key as 'all' | 'movie' | 'tv',
+                          )
+                        }
+                        className={`rounded-xl border px-3 py-1.5 text-sm transition-all ${
+                          active
+                            ? 'border-sky-300/60 bg-sky-500/20 text-sky-200'
+                            : 'border-slate-600/70 bg-slate-800/50 text-slate-200 hover:border-sky-400/50'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {privateItemsWarnings.length > 0 ? (
+                  <div className='mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-sm text-amber-200'>
+                    {privateItemsWarnings.join('；')}
+                  </div>
+                ) : null}
+
+                {privateItemsError ? (
+                  <div className='mt-3 rounded-xl border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200'>
+                    {privateItemsError}
+                  </div>
+                ) : null}
+
+                {privateItemsLoading ? (
+                  <div className='mt-4 flex items-center justify-center gap-2 py-8 text-sm text-slate-300'>
+                    <Loader2 className='h-4 w-4 animate-spin' />
+                    正在读取私人影库内容...
+                  </div>
+                ) : privateItems.length === 0 ? (
+                  <div className='mt-4 rounded-xl border border-dashed border-slate-600/70 bg-slate-800/35 px-4 py-8 text-center text-sm text-slate-300'>
+                    当前筛选条件下没有可展示的私人影库资源。
+                  </div>
+                ) : (
+                  <div className='mt-4 grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
+                    {privateItems.map((item, index) => (
+                      <div
+                        key={`${item.connectorId}-${item.sourceItemId}-${item.id}-${index}`}
+                        className='w-full'
+                        style={{
+                          contentVisibility: 'auto',
+                          containIntrinsicSize: '300px',
+                        }}
+                      >
+                        <VideoCard
+                          id={item.id}
+                          source='private_library'
+                          source_name={item.connectorSourceName}
+                          title={item.title}
+                          poster={item.poster}
+                          year={item.year ? String(item.year) : ''}
+                          type={item.mediaType}
+                          from='search'
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </section>
 
           <section className='rounded-2xl border border-white/10 bg-slate-900/88 p-4 sm:p-5'>

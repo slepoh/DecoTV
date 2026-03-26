@@ -76,9 +76,30 @@ interface OpenListListResponse {
   message?: string;
 }
 
+interface MediaServerAuthenticationResult {
+  AccessToken?: string;
+  User?: {
+    Id?: string;
+    Name?: string;
+  };
+  SessionInfo?: {
+    UserId?: string;
+  };
+}
+
+interface MediaServerAuthSession {
+  accessToken: string;
+  userId?: string;
+  authorizationHeader: string;
+}
+
 const PRIVATE_LIBRARY_CACHE_PREFIX = 'private-lib';
 const PRIVATE_LIBRARY_CONTROL_TIMEOUT_MS = 12_000;
 const PRIVATE_LIBRARY_SCAN_TIMEOUT_MS = 15_000;
+const PRIVATE_LIBRARY_AUTH_CACHE_TTL_SECONDS = 6 * 60 * 60;
+const PRIVATE_LIBRARY_CLIENT_NAME = 'DecoTV';
+const PRIVATE_LIBRARY_CLIENT_DEVICE = 'DecoTV Web';
+const PRIVATE_LIBRARY_CLIENT_VERSION = '1.0.0';
 
 function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -169,6 +190,43 @@ function buildBasicAuth(username?: string, password?: string): string {
   return `Basic ${Buffer.from(`${u}:${p}`, 'utf8').toString('base64')}`;
 }
 
+function hasCredentialPair(username?: string, password?: string): boolean {
+  return Boolean(sanitizeString(username) && sanitizeString(password));
+}
+
+function getMediaServerDeviceId(connector: PrivateLibraryConnector): string {
+  return `decotv-private-${connector.type}-${connector.id}`;
+}
+
+function buildMediaBrowserAuthorizationHeader(args: {
+  connector: PrivateLibraryConnector;
+  token?: string;
+  userId?: string;
+}): string {
+  const parts = [
+    `Client="${PRIVATE_LIBRARY_CLIENT_NAME}"`,
+    `Device="${PRIVATE_LIBRARY_CLIENT_DEVICE}"`,
+    `DeviceId="${getMediaServerDeviceId(args.connector)}"`,
+    `Version="${PRIVATE_LIBRARY_CLIENT_VERSION}"`,
+  ];
+
+  if (args.userId) {
+    parts.unshift(`UserId="${args.userId}"`);
+  }
+
+  if (args.token) {
+    parts.push(`Token="${args.token}"`);
+  }
+
+  return `MediaBrowser ${parts.join(', ')}`;
+}
+
+function getMediaServerAuthCacheKey(
+  connector: PrivateLibraryConnector,
+): string {
+  return `${PRIVATE_LIBRARY_CACHE_PREFIX}:${connector.id}:auth:${connector.updatedAt}`;
+}
+
 function openListHeaders(
   connector: PrivateLibraryConnector,
 ): Record<string, string> {
@@ -190,8 +248,10 @@ function openListHeaders(
 
 function buildMediaServerHeaders(
   connector: PrivateLibraryConnector,
+  auth?: MediaServerAuthSession,
 ): Record<string, string> {
-  const token = sanitizeString(connector.token);
+  const token = sanitizeString(auth?.accessToken || connector.token);
+  const userId = sanitizeString(auth?.userId || connector.userId);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
@@ -199,12 +259,101 @@ function buildMediaServerHeaders(
 
   if (token) {
     headers['X-Emby-Token'] = token;
-    headers.Authorization = token.startsWith('MediaBrowser ')
-      ? token
-      : `MediaBrowser Token="${token}"`;
+    headers.Authorization = buildMediaBrowserAuthorizationHeader({
+      connector,
+      token,
+      userId: userId || undefined,
+    });
+    headers['X-Emby-Authorization'] = buildMediaBrowserAuthorizationHeader({
+      connector,
+      token,
+      userId: userId || undefined,
+    });
   }
 
   return headers;
+}
+
+async function resolveMediaServerAuth(
+  connector: PrivateLibraryConnector,
+  options: { forceRefresh?: boolean } = {},
+): Promise<MediaServerAuthSession> {
+  const staticToken = sanitizeString(connector.token);
+  const staticUserId = sanitizeString(connector.userId);
+  if (staticToken && !options.forceRefresh) {
+    return {
+      accessToken: staticToken,
+      userId: staticUserId || undefined,
+      authorizationHeader: buildMediaBrowserAuthorizationHeader({
+        connector,
+        token: staticToken,
+        userId: staticUserId || undefined,
+      }),
+    };
+  }
+
+  if (!hasCredentialPair(connector.username, connector.password)) {
+    throw new PrivateLibraryError(
+      'Emby / Jellyfin requires an API key or username/password.',
+      'invalid_config',
+    );
+  }
+
+  const cacheKey = getMediaServerAuthCacheKey(connector);
+  if (!options.forceRefresh) {
+    const cached = getServerCache<MediaServerAuthSession>(cacheKey);
+    if (cached?.accessToken) {
+      return cached;
+    }
+  }
+
+  const authorizationHeader = buildMediaBrowserAuthorizationHeader({
+    connector,
+  });
+  const payload = await fetchJsonWithTimeout<MediaServerAuthenticationResult>(
+    `${connector.serverUrl}/Users/AuthenticateByName`,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: authorizationHeader,
+        'X-Emby-Authorization': authorizationHeader,
+      },
+      body: JSON.stringify({
+        Username: sanitizeString(connector.username),
+        Pw: sanitizeString(connector.password),
+        Password: sanitizeString(connector.password),
+      }),
+    },
+    PRIVATE_LIBRARY_CONTROL_TIMEOUT_MS,
+    connector.type === 'emby' ? 'Emby' : 'Jellyfin',
+  );
+
+  const accessToken = sanitizeString(payload.AccessToken);
+  const userId = sanitizeString(
+    payload.User?.Id || payload.SessionInfo?.UserId || connector.userId,
+  );
+
+  if (!accessToken) {
+    throw new PrivateLibraryError(
+      `${connector.type === 'emby' ? 'Emby' : 'Jellyfin'} login did not return an access token.`,
+      'unauthorized',
+    );
+  }
+
+  const session: MediaServerAuthSession = {
+    accessToken,
+    userId: userId || undefined,
+    authorizationHeader: buildMediaBrowserAuthorizationHeader({
+      connector,
+      token: accessToken,
+      userId: userId || undefined,
+    }),
+  };
+
+  setServerCache(cacheKey, session, PRIVATE_LIBRARY_AUTH_CACHE_TTL_SECONDS);
+  return session;
 }
 
 function parseTmdbId(input: string): number | undefined {
@@ -452,13 +601,15 @@ async function scanOpenList(
 async function scanEmbyLike(
   connector: PrivateLibraryConnector,
 ): Promise<PrivateLibraryItem[]> {
-  const apiKey = sanitizeString(connector.token);
+  const auth = await resolveMediaServerAuth(connector);
   const libraryFilter = new Set(
     sanitizeStringArray(connector.libraryFilter).map((item) =>
       item.toLowerCase(),
     ),
   );
-  const authQuery = apiKey ? `api_key=${encodeURIComponent(apiKey)}` : '';
+  const authQuery = auth.accessToken
+    ? `api_key=${encodeURIComponent(auth.accessToken)}`
+    : '';
   const payload = await fetchJsonWithTimeout<{
     Items?: Array<{
       Id: string;
@@ -472,10 +623,7 @@ async function scanEmbyLike(
   }>(
     `${connector.serverUrl}/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds,ProductionYear,CollectionType&${authQuery}`,
     {
-      headers: {
-        Accept: 'application/json',
-        ...(apiKey ? { 'X-Emby-Token': apiKey } : {}),
-      },
+      headers: buildMediaServerHeaders(connector, auth),
     },
     PRIVATE_LIBRARY_SCAN_TIMEOUT_MS,
     connector.type === 'emby' ? 'Emby' : 'Jellyfin',
@@ -518,6 +666,25 @@ function getConnectorCacheKey(connectorId: string): string {
   return `${PRIVATE_LIBRARY_CACHE_PREFIX}:${connectorId}:items`;
 }
 
+export function getPrivateLibraryConnectorTypeLabel(
+  type: PrivateLibraryConnectorType,
+): string {
+  switch (type) {
+    case 'emby':
+      return 'Emby';
+    case 'jellyfin':
+      return 'Jellyfin';
+    default:
+      return 'OpenList';
+  }
+}
+
+export function formatPrivateLibrarySourceName(
+  connector: Pick<PrivateLibraryConnector, 'type' | 'name'>,
+): string {
+  return `${getPrivateLibraryConnectorTypeLabel(connector.type)} · ${connector.name}`;
+}
+
 function buildPrivateProgressKey(
   username: string,
   connectorType: PrivateLibraryConnectorType,
@@ -540,7 +707,7 @@ function buildPrivateProgressRecord(
 
   return {
     title: payload.sourceItemId,
-    source_name: connector.name,
+    source_name: formatPrivateLibrarySourceName(connector),
     cover: '',
     year: '',
     index: 1,
@@ -600,15 +767,15 @@ export async function testConnector(
       return { ok: true };
     }
 
-    await fetchJsonWithTimeout<{ Version?: string }>(
-      `${connector.serverUrl}/System/Info/Public`,
+    const auth = await resolveMediaServerAuth(connector);
+    const authQuery = auth.accessToken
+      ? `api_key=${encodeURIComponent(auth.accessToken)}`
+      : '';
+
+    await fetchJsonWithTimeout<{ Items?: unknown[] }>(
+      `${connector.serverUrl}/Items?Limit=1&Recursive=false&${authQuery}`,
       {
-        headers: {
-          Accept: 'application/json',
-          ...(sanitizeString(connector.token)
-            ? { 'X-Emby-Token': sanitizeString(connector.token) }
-            : {}),
-        },
+        headers: buildMediaServerHeaders(connector, auth),
       },
       PRIVATE_LIBRARY_CONTROL_TIMEOUT_MS,
       connector.type === 'emby' ? 'Emby' : 'Jellyfin',
@@ -648,16 +815,16 @@ export async function resolveStreamRequest(
     };
   }
 
-  const apiKey = sanitizeString(connector.token);
+  const auth = await resolveMediaServerAuth(connector);
   const query = new URLSearchParams();
   query.set('static', 'true');
-  if (apiKey) {
-    query.set('api_key', apiKey);
+  if (auth.accessToken) {
+    query.set('api_key', auth.accessToken);
   }
 
   return {
     url: `${connector.serverUrl}/Videos/${encodeURIComponent(sourceItemId)}/stream?${query.toString()}`,
-    headers: apiKey ? { 'X-Emby-Token': apiKey } : {},
+    headers: buildMediaServerHeaders(connector, auth),
   };
 }
 
@@ -704,12 +871,15 @@ export async function reportPrivateLibraryProgress(
     return { ok: true, synced: false };
   }
 
-  const headers = buildMediaServerHeaders(connector);
+  const auth = await resolveMediaServerAuth(connector);
+  const headers = buildMediaServerHeaders(connector, auth);
   const positionTicks = parseTick(payload.positionTicks);
   const runtimeTicks = parseTick(payload.runtimeTicks);
   const baseUrl = connector.serverUrl.replace(/\/+$/, '');
-  const token = sanitizeString(connector.token);
-  const authQuery = token ? `?api_key=${encodeURIComponent(token)}` : '';
+  const authQuery = auth.accessToken
+    ? `?api_key=${encodeURIComponent(auth.accessToken)}`
+    : '';
+  const effectiveUserId = sanitizeString(connector.userId || auth.userId);
   const body = {
     ItemId: payload.sourceItemId,
     PositionTicks: positionTicks,
@@ -734,9 +904,9 @@ export async function reportPrivateLibraryProgress(
 
   try {
     if (payload.event === 'played') {
-      if (connector.userId) {
+      if (effectiveUserId) {
         await send(
-          `/Users/${encodeURIComponent(connector.userId)}/PlayedItems/${encodeURIComponent(payload.sourceItemId)}`,
+          `/Users/${encodeURIComponent(effectiveUserId)}/PlayedItems/${encodeURIComponent(payload.sourceItemId)}`,
           {},
         );
       }

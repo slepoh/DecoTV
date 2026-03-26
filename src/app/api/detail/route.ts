@@ -4,6 +4,7 @@ import { getAuthInfoFromCookie, verifyApiAuth } from '@/lib/auth';
 import { getAvailableApiSites, getCacheTime } from '@/lib/config';
 import { getDetailFromApi } from '@/lib/downstream';
 import {
+  formatPrivateLibrarySourceName,
   getConnectorCachedItems,
   getPrivateLibraryConfig,
   scanConnector,
@@ -101,7 +102,7 @@ export async function GET(request: NextRequest) {
           episodes: [streamUrl],
           episodes_titles: [target.title],
           source: 'private_library',
-          source_name: `私人影库 · ${connector.name}`,
+          source_name: formatPrivateLibrarySourceName(connector),
           class: '私人影库',
           year: target.year ? String(target.year) : 'unknown',
           desc,

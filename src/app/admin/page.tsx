@@ -8500,6 +8500,9 @@ function validatePrivateConnector(
   const name = connector.name.trim() || '未命名连接';
   const serverUrl = connector.serverUrl.trim();
   const token = connector.token.trim();
+  const hasAccountPassword = Boolean(
+    connector.username?.trim() && connector.password?.trim(),
+  );
 
   if (!serverUrl) {
     return `${name}：服务器地址不能为空`;
@@ -8510,14 +8513,14 @@ function validatePrivateConnector(
   }
 
   if (connector.type === 'openlist') {
-    if (!token) {
-      return `${name}：OpenList Token 不能为空`;
+    if (!token && !hasAccountPassword) {
+      return `${name}：OpenList 需要填写 Token，或填写用户名和密码`;
     }
     return null;
   }
 
-  if (!token) {
-    return `${name}：API Key 不能为空`;
+  if (!token && !hasAccountPassword) {
+    return `${name}：Emby / Jellyfin 需要填写 API Key，或填写用户名和密码`;
   }
 
   return null;
@@ -8849,7 +8852,7 @@ const PrivateLibraryConfigPanel = ({
               onChange={(event) =>
                 patchConnector(connector.id, { serverUrl: event.target.value })
               }
-              placeholder='服务地址，例如 https://emby.example.com'
+              placeholder='服务地址，例如 http://emby.example.com:8096'
               className='md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm'
             />
 
@@ -8859,14 +8862,14 @@ const PrivateLibraryConfigPanel = ({
               onChange={(event) =>
                 patchConnector(connector.id, { token: event.target.value })
               }
-              placeholder='Token / API Key'
+              placeholder='Token / API Key（可选）'
               className='md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-sm font-mono'
             />
 
             <div className='md:col-span-2 text-xs text-gray-500 dark:text-gray-400'>
               {connector.type === 'openlist'
-                ? 'OpenList 需要可用于 API 调用的 Token。'
-                : '当前 Emby / Jellyfin 接入走服务端 API Key / Access Token 模式，不支持仅凭用户名和密码直接连接。UserId 仅用于播放进度回写。'}
+                ? 'OpenList 可使用 Token，部分部署也可尝试用户名 + 密码；服务地址里直接填写端口。'
+                : 'Emby / Jellyfin 现已支持两种方式：API Key / Access Token，或用户名 + 密码登录。服务地址里直接填写端口，如 http://host:8096。UserId 仅用于播放进度回写，不填会尽量自动解析。'}
             </div>
 
             <input
