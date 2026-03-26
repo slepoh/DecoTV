@@ -74,8 +74,18 @@ interface WakeLockSentinel {
 // 弹幕播放器偏好设置持久化
 const DANMUKU_SETTINGS_KEY = 'decotv_danmuku_settings';
 const PLAYER_PLAYBACK_RATE_KEY = 'decotv_player_playback_rate';
+const PREFERRED_AUDIO_LANG_KEY = 'preferred_audio_lang';
+const AUDIO_TRACK_CONTROL_NAME = 'audio-track-control';
 type DanmukuMode = 0 | 1 | 2;
 type DanmukuMarginValue = number | `${number}%`;
+
+interface AudioTrack {
+  id: number;
+  name: string;
+  lang?: string;
+  isDefault: boolean;
+  hlsIndex?: number;
+}
 
 interface DanmukuSettings {
   speed: number;
@@ -96,6 +106,175 @@ const DEFAULT_DANMUKU_SETTINGS: DanmukuSettings = {
   antiOverlap: true,
   visible: true,
 };
+
+function normalizeAudioLang(rawLang?: string): string {
+  if (!rawLang) {
+    return '';
+  }
+
+  return rawLang.trim().toLowerCase();
+}
+
+function mapAudioLanguageLabel(rawLang?: string): string {
+  const lang = normalizeAudioLang(rawLang);
+  if (!lang) {
+    return '';
+  }
+
+  if (lang === 'zh-cn' || lang === 'cmn' || lang === 'zh-hans') {
+    return '普通话';
+  }
+
+  if (
+    lang === 'zh-tw' ||
+    lang === 'zh-hk' ||
+    lang === 'yue' ||
+    lang === 'zh-hant'
+  ) {
+    return '粤语/繁中';
+  }
+
+  if (lang === 'zh' || lang === 'chi' || lang === 'zho') {
+    return '中文';
+  }
+
+  if (lang === 'en' || lang === 'eng') {
+    return 'English';
+  }
+
+  if (lang === 'ja' || lang === 'jpn') {
+    return '日语';
+  }
+
+  if (lang === 'ko' || lang === 'kor') {
+    return '韩语';
+  }
+
+  return rawLang || lang;
+}
+
+function isUsefulTrackName(rawName?: string): boolean {
+  if (!rawName) {
+    return false;
+  }
+
+  const normalized = rawName.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return false;
+  }
+
+  if (/^audio\s*\d+$/i.test(normalized)) {
+    return false;
+  }
+
+  return true;
+}
+
+function resolveAudioTrackName(
+  rawName: string | undefined,
+  rawLang: string | undefined,
+  index: number,
+): string {
+  if (isUsefulTrackName(rawName)) {
+    return (rawName || '').trim();
+  }
+
+  const mappedLanguage = mapAudioLanguageLabel(rawLang);
+  if (mappedLanguage) {
+    return mappedLanguage;
+  }
+
+  return `音轨 ${index + 1}`;
+}
+
+function loadPreferredAudioLang(): string {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    return normalizeAudioLang(
+      localStorage.getItem(PREFERRED_AUDIO_LANG_KEY) || '',
+    );
+  } catch {
+    return '';
+  }
+}
+
+function savePreferredAudioLang(rawLang?: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const normalized = normalizeAudioLang(rawLang);
+  if (!normalized) {
+    return;
+  }
+
+  try {
+    localStorage.setItem(PREFERRED_AUDIO_LANG_KEY, normalized);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function appendAudioStreamIndex(url: string, audioStreamIndex: number): string {
+  if (!url) {
+    return url;
+  }
+
+  try {
+    const base =
+      typeof window !== 'undefined'
+        ? window.location.origin
+        : 'http://localhost';
+    const parsed = new URL(url, base);
+    parsed.searchParams.set('audioStreamIndex', String(audioStreamIndex));
+
+    if (/^https?:\/\//i.test(url)) {
+      return parsed.toString();
+    }
+
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}audioStreamIndex=${encodeURIComponent(String(audioStreamIndex))}`;
+  }
+}
+
+function parseAudioStreamIndexFromUrl(url: string): number {
+  if (!url) {
+    return -1;
+  }
+
+  try {
+    const base =
+      typeof window !== 'undefined'
+        ? window.location.origin
+        : 'http://localhost';
+    const parsed = new URL(url, base);
+    const rawValue = parsed.searchParams.get('audioStreamIndex');
+    if (!rawValue || !/^\d+$/.test(rawValue)) {
+      return -1;
+    }
+    return Number(rawValue);
+  } catch {
+    return -1;
+  }
+}
+
+function escapeAudioTrackHtml(rawValue: string): string {
+  return rawValue
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
 
 function sanitizePlaybackRate(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -451,6 +630,21 @@ function PlayPageClient() {
     message: '',
     type: 'info',
   });
+  const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
+  const [currentAudioTrack, setCurrentAudioTrack] = useState(-1);
+  const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  const [isAudioTrackSwitching, setIsAudioTrackSwitching] = useState(false);
+
+  const audioTracksRef = useRef<AudioTrack[]>([]);
+  const currentAudioTrackRef = useRef(-1);
+  const privateProgressPausedRef = useRef(false);
+  const pendingPrivateAudioSwitchRef = useRef(false);
+  const preferredAudioScopeRef = useRef('');
+
+  useEffect(() => {
+    audioTracksRef.current = audioTracks;
+    currentAudioTrackRef.current = currentAudioTrack;
+  }, [audioTracks, currentAudioTrack]);
 
   // 显示 Toast 通知
   const showToast = (
@@ -485,6 +679,21 @@ function PlayPageClient() {
       sourceItemId,
     };
   };
+
+  const isPrivateEmbyLikeSource =
+    isPrivateLibrarySource(currentSource) &&
+    (detail?.connector_type === 'emby' ||
+      detail?.connector_type === 'jellyfin');
+
+  const currentAudioTrackName = useMemo(() => {
+    const selected = audioTracks.find((track) =>
+      typeof track.hlsIndex === 'number'
+        ? track.hlsIndex === currentAudioTrack
+        : track.id === currentAudioTrack,
+    );
+
+    return selected?.name || '音轨';
+  }, [audioTracks, currentAudioTrack]);
 
   // 换源加载状态
   const [isVideoLoading, setIsVideoLoading] = useState(true);
@@ -675,6 +884,245 @@ function PlayPageClient() {
       }
     }
   };
+
+  useEffect(() => {
+    setAudioTracks([]);
+    setCurrentAudioTrack(-1);
+    setAudioMenuOpen(false);
+    setIsAudioTrackSwitching(false);
+    privateProgressPausedRef.current = false;
+    pendingPrivateAudioSwitchRef.current = false;
+    preferredAudioScopeRef.current = '';
+  }, [currentSource, currentId, currentEpisodeIndex]);
+
+  useEffect(() => {
+    if (!isPrivateEmbyLikeSource || !detail) {
+      return;
+    }
+
+    const rawTracks = detail.private_audio_streams || [];
+    if (rawTracks.length < 2) {
+      setAudioTracks([]);
+      setCurrentAudioTrack(-1);
+      return;
+    }
+
+    const mappedTracks = rawTracks
+      .map((stream, index) => {
+        const parsedIndex = Number(stream.index);
+        if (!Number.isFinite(parsedIndex) || parsedIndex < 0) {
+          return null;
+        }
+
+        return {
+          id: Math.floor(parsedIndex),
+          name: resolveAudioTrackName(
+            stream.display_title,
+            stream.language,
+            index,
+          ),
+          lang: stream.language,
+          isDefault: Boolean(stream.is_default),
+        } as AudioTrack;
+      })
+      .filter((track): track is AudioTrack => Boolean(track))
+      .sort((left, right) => left.id - right.id);
+
+    if (mappedTracks.length < 2) {
+      setAudioTracks([]);
+      setCurrentAudioTrack(-1);
+      return;
+    }
+
+    setAudioTracks(mappedTracks);
+
+    const activeUrl =
+      videoUrl ||
+      detail.episodes?.[currentEpisodeIndex] ||
+      detail.episodes?.[0] ||
+      '';
+    let selectedTrackIndex = parseAudioStreamIndexFromUrl(activeUrl);
+    if (selectedTrackIndex < 0) {
+      selectedTrackIndex =
+        mappedTracks.find((track) => track.isDefault)?.id ?? mappedTracks[0].id;
+    }
+    setCurrentAudioTrack(selectedTrackIndex);
+
+    const preferredAudioLang = loadPreferredAudioLang();
+    if (!preferredAudioLang) {
+      return;
+    }
+
+    const scopeKey = `${detail.connector_id || ''}:${detail.source_item_id || ''}`;
+    if (preferredAudioScopeRef.current === scopeKey) {
+      return;
+    }
+
+    preferredAudioScopeRef.current = scopeKey;
+    const preferredTrack = mappedTracks.find(
+      (track) => normalizeAudioLang(track.lang) === preferredAudioLang,
+    );
+
+    if (!preferredTrack || preferredTrack.id === selectedTrackIndex) {
+      return;
+    }
+
+    const targetUrl = appendAudioStreamIndex(activeUrl, preferredTrack.id);
+    setCurrentAudioTrack(preferredTrack.id);
+    if (targetUrl && targetUrl !== activeUrl) {
+      setVideoUrl(targetUrl);
+    }
+  }, [currentEpisodeIndex, detail, isPrivateEmbyLikeSource, videoUrl]);
+
+  const handleAudioTrackSelect = async (track: AudioTrack) => {
+    if (typeof track.hlsIndex === 'number') {
+      const hls = artPlayerRef.current?.video?.hls;
+      if (!hls) {
+        setAudioMenuOpen(false);
+        return;
+      }
+
+      if (hls.audioTrack === track.hlsIndex) {
+        setAudioMenuOpen(false);
+        return;
+      }
+
+      try {
+        hls.audioTrack = track.hlsIndex;
+        setCurrentAudioTrack(track.hlsIndex);
+        savePreferredAudioLang(track.lang);
+      } catch (error) {
+        console.warn('切换 HLS 音轨失败:', error);
+      } finally {
+        setAudioMenuOpen(false);
+      }
+      return;
+    }
+
+    if (!isPrivateEmbyLikeSource) {
+      setAudioMenuOpen(false);
+      return;
+    }
+
+    if (track.id === currentAudioTrackRef.current) {
+      setAudioMenuOpen(false);
+      return;
+    }
+
+    const currentTime = artPlayerRef.current?.currentTime || 0;
+    resumeTimeRef.current = currentTime;
+    setCurrentAudioTrack(track.id);
+    savePreferredAudioLang(track.lang);
+
+    const nextUrl = appendAudioStreamIndex(videoUrl, track.id);
+    if (!nextUrl || nextUrl === videoUrl) {
+      setAudioMenuOpen(false);
+      return;
+    }
+
+    pendingPrivateAudioSwitchRef.current = true;
+    privateProgressPausedRef.current = true;
+    setIsAudioTrackSwitching(true);
+    setAudioMenuOpen(false);
+    setVideoUrl(nextUrl);
+  };
+
+  const buildAudioTrackControl = () => {
+    const selector = audioTracks.map((track, index) => {
+      const selected =
+        typeof track.hlsIndex === 'number'
+          ? track.hlsIndex === currentAudioTrack
+          : track.id === currentAudioTrack;
+
+      return {
+        html: `${selected ? '▶ ' : ''}${escapeAudioTrackHtml(track.name)}`,
+        trackId: track.id,
+        trackHlsIndex: track.hlsIndex,
+        default: selected,
+        lang: track.lang,
+        isDefault: track.isDefault,
+        trackOrder: index,
+      };
+    });
+
+    return {
+      name: AUDIO_TRACK_CONTROL_NAME,
+      position: 'right' as const,
+      index: 6,
+      tooltip: isAudioTrackSwitching
+        ? '音轨切换中...'
+        : `音轨: ${currentAudioTrackName}`,
+      style: {
+        display: audioTracks.length >= 2 ? 'flex' : 'none',
+      },
+      html: isAudioTrackSwitching
+        ? '<i class="art-icon flex art-audio-track-trigger"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" stroke-opacity="0.35"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i>'
+        : '<i class="art-icon flex art-audio-track-trigger"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 9v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9 7v10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M17 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i>',
+      selector,
+      click: function () {
+        setAudioMenuOpen((prev) => !prev);
+      },
+      onSelect: function (selectorItem: any) {
+        const selectedTrackId = Number(selectorItem.trackId);
+        const selectedTrackHlsIndex = Number(selectorItem.trackHlsIndex);
+        const selectedTrack = audioTracksRef.current.find((track) => {
+          if (track.id !== selectedTrackId) {
+            return false;
+          }
+
+          if (Number.isFinite(selectedTrackHlsIndex)) {
+            return track.hlsIndex === selectedTrackHlsIndex;
+          }
+
+          return true;
+        });
+
+        if (selectedTrack) {
+          void handleAudioTrackSelect(selectedTrack);
+        }
+        setAudioMenuOpen(false);
+      },
+    };
+  };
+
+  useEffect(() => {
+    if (!audioMenuOpen) {
+      return;
+    }
+
+    const closeMenu = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Element | null;
+      if (!target) {
+        return;
+      }
+
+      if (target.closest('.art-audio-track-trigger')) {
+        return;
+      }
+
+      if (target.closest('.art-selector-list')) {
+        return;
+      }
+
+      setAudioMenuOpen(false);
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setAudioMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', closeMenu);
+    document.addEventListener('touchstart', closeMenu);
+    document.addEventListener('keydown', closeOnEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', closeMenu);
+      document.removeEventListener('touchstart', closeMenu);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [audioMenuOpen]);
 
   const loadDanmuToPlayer = (list: DanmuItem[]) => {
     if (!artPlayerRef.current) return;
@@ -2154,6 +2602,10 @@ function PlayPageClient() {
       return;
     }
 
+    if (event === 'progress' && !force && privateProgressPausedRef.current) {
+      return;
+    }
+
     const now = Date.now();
     if (!force && now - privateProgressSyncRef.current < 30_000) {
       return;
@@ -2476,6 +2928,85 @@ function PlayPageClient() {
 
             ensureVideoSource(video, url);
 
+            hls.on(
+              Hls.Events.AUDIO_TRACKS_UPDATED,
+              (_event: any, data: any) => {
+                const nextTracks = (
+                  Array.isArray(data?.audioTracks)
+                    ? data.audioTracks
+                    : Array.isArray(hls.audioTracks)
+                      ? hls.audioTracks
+                      : []
+                ) as Array<{
+                  id?: number;
+                  name?: string;
+                  lang?: string;
+                  default?: boolean;
+                }>;
+
+                if (nextTracks.length < 2) {
+                  setAudioTracks([]);
+                  setCurrentAudioTrack(-1);
+                  return;
+                }
+
+                const mappedTracks = nextTracks.map((track, index) => ({
+                  id:
+                    typeof track.id === 'number' && Number.isFinite(track.id)
+                      ? track.id
+                      : index,
+                  name: resolveAudioTrackName(track.name, track.lang, index),
+                  lang: track.lang,
+                  isDefault: Boolean(track.default),
+                  hlsIndex: index,
+                }));
+
+                setAudioTracks(mappedTracks);
+                const activeHlsIndex =
+                  typeof hls.audioTrack === 'number' && hls.audioTrack >= 0
+                    ? hls.audioTrack
+                    : (mappedTracks.find((track) => track.isDefault)
+                        ?.hlsIndex ??
+                      mappedTracks[0].hlsIndex ??
+                      -1);
+                setCurrentAudioTrack(activeHlsIndex);
+
+                const preferredAudioLang = loadPreferredAudioLang();
+                if (!preferredAudioLang) {
+                  return;
+                }
+
+                const preferredTrack = mappedTracks.find(
+                  (track) =>
+                    normalizeAudioLang(track.lang) === preferredAudioLang,
+                );
+
+                if (
+                  preferredTrack &&
+                  typeof preferredTrack.hlsIndex === 'number' &&
+                  preferredTrack.hlsIndex !== hls.audioTrack
+                ) {
+                  hls.audioTrack = preferredTrack.hlsIndex;
+                }
+              },
+            );
+
+            hls.on(
+              Hls.Events.AUDIO_TRACK_SWITCHED,
+              (_event: any, data: any) => {
+                const switchedIndex =
+                  typeof data?.id === 'number' && data.id >= 0
+                    ? data.id
+                    : hls.audioTrack;
+
+                setCurrentAudioTrack(switchedIndex);
+                const switchedTrack = Array.isArray(hls.audioTracks)
+                  ? hls.audioTracks[switchedIndex]
+                  : null;
+                savePreferredAudioLang(switchedTrack?.lang);
+              },
+            );
+
             hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
               if (data.fatal) {
@@ -2608,6 +3139,7 @@ function PlayPageClient() {
               handleNextEpisode();
             },
           },
+          buildAudioTrackControl(),
           // 投屏按钮 - 始终显示，美观的 UI 设计
           {
             position: 'right',
@@ -2796,6 +3328,12 @@ function PlayPageClient() {
           artPlayerRef.current.notice.show = '';
         }, 0);
 
+        if (pendingPrivateAudioSwitchRef.current) {
+          pendingPrivateAudioSwitchRef.current = false;
+          privateProgressPausedRef.current = false;
+          setIsAudioTrackSwitching(false);
+        }
+
         // 隐藏换源加载状态
         setIsVideoLoading(false);
       });
@@ -2855,6 +3393,11 @@ function PlayPageClient() {
 
       artPlayerRef.current.on('error', (err: any) => {
         console.error('播放器错误:', err);
+        if (pendingPrivateAudioSwitchRef.current) {
+          pendingPrivateAudioSwitchRef.current = false;
+          privateProgressPausedRef.current = false;
+          setIsAudioTrackSwitching(false);
+        }
         if (artPlayerRef.current.currentTime > 0) {
           return;
         }
@@ -2899,6 +3442,23 @@ function PlayPageClient() {
       setError('播放器初始化失败');
     }
   }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled]);
+
+  useEffect(() => {
+    if (!artPlayerRef.current?.controls?.update) {
+      return;
+    }
+
+    try {
+      artPlayerRef.current.controls.update(buildAudioTrackControl());
+    } catch {
+      // 控件未挂载时静默忽略，等待下次播放器初始化后更新。
+    }
+  }, [
+    audioTracks,
+    currentAudioTrack,
+    currentAudioTrackName,
+    isAudioTrackSwitching,
+  ]);
 
   useEffect(() => {
     loadDanmuToPlayer(danmuList);

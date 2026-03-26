@@ -41,6 +41,14 @@ export interface PrivateLibraryProgressResult {
   detail?: string;
 }
 
+export interface PrivateLibraryAudioStream {
+  index: number;
+  displayTitle?: string;
+  language?: string;
+  codec?: string;
+  isDefault: boolean;
+}
+
 export class PrivateLibraryError extends Error {
   code:
     | 'invalid_config'
@@ -93,6 +101,26 @@ interface MediaServerAuthSession {
   accessToken: string;
   userId?: string;
   authorizationHeader: string;
+}
+
+interface EmbyMediaStream {
+  Type?: string;
+  Index?: number;
+  DisplayTitle?: string;
+  Language?: string;
+  Codec?: string;
+  IsDefault?: boolean;
+}
+
+interface EmbyPlaybackInfoResponse {
+  MediaSources?: Array<{
+    MediaStreams?: EmbyMediaStream[];
+  }>;
+  MediaStreams?: EmbyMediaStream[];
+}
+
+interface EmbyItemDetailResponse {
+  MediaStreams?: EmbyMediaStream[];
 }
 
 const PRIVATE_LIBRARY_CACHE_PREFIX = 'private-lib';
@@ -402,6 +430,15 @@ function parseTick(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) {
     return 0;
+  }
+
+  return Math.floor(parsed);
+}
+
+function parseAudioStreamIndex(value: unknown): number | undefined {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
   }
 
   return Math.floor(parsed);
@@ -788,9 +825,134 @@ export async function testConnector(
   }
 }
 
+async function fetchPlaybackInfoMediaStreams(
+  connector: PrivateLibraryConnector,
+  auth: MediaServerAuthSession,
+  sourceItemId: string,
+): Promise<EmbyMediaStream[]> {
+  const serviceName = connector.type === 'emby' ? 'Emby' : 'Jellyfin';
+  const baseUrl = connector.serverUrl.replace(/\/+$/, '');
+  const headers = buildMediaServerHeaders(connector, auth);
+  const effectiveUserId = sanitizeString(connector.userId || auth.userId);
+  const query = new URLSearchParams();
+
+  if (auth.accessToken) {
+    query.set('api_key', auth.accessToken);
+  }
+  if (effectiveUserId) {
+    query.set('UserId', effectiveUserId);
+  }
+
+  const playbackInfoUrl = `${baseUrl}/Items/${encodeURIComponent(sourceItemId)}/PlaybackInfo${query.toString() ? `?${query.toString()}` : ''}`;
+
+  const requestBody = {
+    UserId: effectiveUserId || undefined,
+    StartTimeTicks: 0,
+    IsPlayback: true,
+    AutoOpenLiveStream: true,
+  };
+
+  try {
+    const payload = await fetchJsonWithTimeout<EmbyPlaybackInfoResponse>(
+      playbackInfoUrl,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+      },
+      PRIVATE_LIBRARY_CONTROL_TIMEOUT_MS,
+      serviceName,
+    );
+
+    const streams =
+      payload.MediaSources?.[0]?.MediaStreams || payload.MediaStreams || [];
+
+    if (streams.length > 0) {
+      return streams;
+    }
+  } catch {
+    // PlaybackInfo 在部分服务端可能禁用 POST，后续回退 GET。
+  }
+
+  try {
+    const payload = await fetchJsonWithTimeout<EmbyPlaybackInfoResponse>(
+      playbackInfoUrl,
+      {
+        method: 'GET',
+        headers,
+      },
+      PRIVATE_LIBRARY_CONTROL_TIMEOUT_MS,
+      serviceName,
+    );
+
+    const streams =
+      payload.MediaSources?.[0]?.MediaStreams || payload.MediaStreams || [];
+
+    if (streams.length > 0) {
+      return streams;
+    }
+  } catch {
+    // ignore and fallback to item detail
+  }
+
+  const itemDetailUrl = `${baseUrl}/Items/${encodeURIComponent(sourceItemId)}?Fields=MediaStreams${query.toString() ? `&${query.toString()}` : ''}`;
+  const itemDetail = await fetchJsonWithTimeout<EmbyItemDetailResponse>(
+    itemDetailUrl,
+    {
+      method: 'GET',
+      headers,
+    },
+    PRIVATE_LIBRARY_CONTROL_TIMEOUT_MS,
+    serviceName,
+  );
+
+  return itemDetail.MediaStreams || [];
+}
+
+export async function resolvePrivateLibraryAudioStreams(
+  connectorId: string,
+  sourceItemId: string,
+): Promise<PrivateLibraryAudioStream[]> {
+  const cfg = await getPrivateLibraryConfig();
+  const connector = cfg.connectors.find(
+    (item) => item.id === connectorId && item.enabled,
+  );
+
+  if (!connector || connector.type === 'openlist') {
+    return [];
+  }
+
+  const auth = await resolveMediaServerAuth(connector);
+  const mediaStreams = await fetchPlaybackInfoMediaStreams(
+    connector,
+    auth,
+    sourceItemId,
+  );
+
+  return mediaStreams
+    .filter((stream) => sanitizeString(stream.Type).toLowerCase() === 'audio')
+    .map((stream) => {
+      const index = parseAudioStreamIndex(stream.Index);
+      if (index === undefined) {
+        return null;
+      }
+
+      return {
+        index,
+        displayTitle: sanitizeString(stream.DisplayTitle),
+        language: sanitizeString(stream.Language),
+        codec: sanitizeString(stream.Codec),
+        isDefault: Boolean(stream.IsDefault),
+      } as PrivateLibraryAudioStream;
+    })
+    .filter((stream): stream is PrivateLibraryAudioStream => Boolean(stream))
+    .sort((left, right) => left.index - right.index);
+}
+
 export async function resolveStreamRequest(
   connectorId: string,
   sourceItemId: string,
+  audioStreamIndex?: number,
 ): Promise<{ url: string; headers?: Record<string, string> } | null> {
   const cfg = await getPrivateLibraryConfig();
   const connector = cfg.connectors.find(
@@ -818,6 +980,10 @@ export async function resolveStreamRequest(
   query.set('static', 'true');
   if (auth.accessToken) {
     query.set('api_key', auth.accessToken);
+  }
+  const normalizedAudioStreamIndex = parseAudioStreamIndex(audioStreamIndex);
+  if (normalizedAudioStreamIndex !== undefined) {
+    query.set('AudioStreamIndex', String(normalizedAudioStreamIndex));
   }
 
   return {

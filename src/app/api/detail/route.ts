@@ -8,6 +8,7 @@ import {
   formatPrivateLibrarySourceName,
   getConnectorCachedItems,
   getPrivateLibraryConfig,
+  resolvePrivateLibraryAudioStreams,
   scanConnector,
   toPrivateLibraryErrorMessage,
 } from '@/lib/private-library';
@@ -101,6 +102,17 @@ export async function GET(request: NextRequest) {
         }
 
         const streamUrl = `/api/private-library/stream?connectorId=${encodeURIComponent(target.connectorId)}&sourceItemId=${encodeURIComponent(target.sourceItemId)}`;
+        let privateAudioStreams: Awaited<
+          ReturnType<typeof resolvePrivateLibraryAudioStreams>
+        > = [];
+        try {
+          privateAudioStreams = await resolvePrivateLibraryAudioStreams(
+            target.connectorId,
+            target.sourceItemId,
+          );
+        } catch {
+          // 音轨读取失败时不影响播放主链路。
+        }
 
         const result: SearchResult = {
           id: target.id,
@@ -117,7 +129,15 @@ export async function GET(request: NextRequest) {
           douban_id: undefined,
           tmdb_id: target.tmdbId,
           connector_id: target.connectorId,
+          connector_type: target.connectorType,
           source_item_id: target.sourceItemId,
+          private_audio_streams: privateAudioStreams.map((stream) => ({
+            index: stream.index,
+            display_title: stream.displayTitle,
+            language: stream.language,
+            codec: stream.codec,
+            is_default: stream.isDefault,
+          })),
         };
 
         return NextResponse.json(result, {

@@ -105,7 +105,15 @@ export interface SearchResult {
   douban_id?: number;
   tmdb_id?: number;
   connector_id?: string;
+  connector_type?: 'openlist' | 'emby' | 'jellyfin';
   source_item_id?: string;
+  private_audio_streams?: Array<{
+    index: number;
+    display_title?: string;
+    language?: string;
+    codec?: string;
+    is_default: boolean;
+  }>;
 }
 
 // 豆瓣数据结构

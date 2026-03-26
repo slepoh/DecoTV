@@ -34,6 +34,13 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const connectorId = (searchParams.get('connectorId') || '').trim();
     const sourceItemId = (searchParams.get('sourceItemId') || '').trim();
+    const rawAudioStreamIndex = (
+      searchParams.get('audioStreamIndex') || ''
+    ).trim();
+    const audioStreamIndex =
+      rawAudioStreamIndex && /^\d+$/.test(rawAudioStreamIndex)
+        ? Number(rawAudioStreamIndex)
+        : undefined;
 
     if (!connectorId || !sourceItemId) {
       return NextResponse.json(
@@ -42,7 +49,11 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const stream = await resolveStreamRequest(connectorId, sourceItemId);
+    const stream = await resolveStreamRequest(
+      connectorId,
+      sourceItemId,
+      audioStreamIndex,
+    );
     if (!stream) {
       return NextResponse.json(
         { error: '未找到可用的私有媒体流' },
