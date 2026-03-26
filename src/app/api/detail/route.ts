@@ -8,6 +8,7 @@ import {
   formatPrivateLibrarySourceName,
   getConnectorCachedItems,
   getPrivateLibraryConfig,
+  hydratePrivateLibraryItem,
   resolvePrivateLibraryAudioStreams,
   scanConnector,
   toPrivateLibraryErrorMessage,
@@ -68,47 +69,54 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        const title = target.title;
+        let hydratedTarget = target;
+        try {
+          hydratedTarget = await hydratePrivateLibraryItem(target);
+        } catch {
+          hydratedTarget = target;
+        }
+
+        const title = hydratedTarget.title;
         const poster =
-          target.poster ||
+          hydratedTarget.poster ||
           (connector.type === 'emby' || connector.type === 'jellyfin'
             ? buildPrivateLibraryPosterUrl(
-                target.connectorId,
-                target.sourceItemId,
+                hydratedTarget.connectorId,
+                hydratedTarget.sourceItemId,
               )
             : '');
-        const desc = target.overview || '';
+        const desc = hydratedTarget.overview || '';
 
-        const streamUrl = `/api/private-library/stream?connectorId=${encodeURIComponent(target.connectorId)}&sourceItemId=${encodeURIComponent(target.sourceItemId)}`;
+        const streamUrl = `/api/private-library/stream?connectorId=${encodeURIComponent(hydratedTarget.connectorId)}&sourceItemId=${encodeURIComponent(hydratedTarget.sourceItemId)}`;
         let privateAudioStreams: Awaited<
           ReturnType<typeof resolvePrivateLibraryAudioStreams>
         > = [];
         try {
           privateAudioStreams = await resolvePrivateLibraryAudioStreams(
-            target.connectorId,
-            target.sourceItemId,
+            hydratedTarget.connectorId,
+            hydratedTarget.sourceItemId,
           );
         } catch {
           // 音轨读取失败时不影响播放主链路。
         }
 
         const result: SearchResult = {
-          id: target.id,
+          id: hydratedTarget.id,
           title,
           poster,
           episodes: [streamUrl],
-          episodes_titles: [target.title],
+          episodes_titles: [hydratedTarget.title],
           source: 'private_library',
           source_name: formatPrivateLibrarySourceName(connector),
           class: '私人影库',
-          year: target.year ? String(target.year) : 'unknown',
+          year: hydratedTarget.year ? String(hydratedTarget.year) : 'unknown',
           desc,
-          type_name: target.mediaType === 'tv' ? '剧集' : '电影',
+          type_name: hydratedTarget.mediaType === 'tv' ? '剧集' : '电影',
           douban_id: undefined,
-          tmdb_id: target.tmdbId,
-          connector_id: target.connectorId,
-          connector_type: target.connectorType,
-          source_item_id: target.sourceItemId,
+          tmdb_id: hydratedTarget.tmdbId,
+          connector_id: hydratedTarget.connectorId,
+          connector_type: hydratedTarget.connectorType,
+          source_item_id: hydratedTarget.sourceItemId,
           private_audio_streams: privateAudioStreams.map((stream) => ({
             index: stream.index,
             display_title: stream.displayTitle,

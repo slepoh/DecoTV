@@ -1055,7 +1055,7 @@ function inferAnime(
   return originalLanguage === 'ja' || countries.includes('JP');
 }
 
-async function enrichItemWithTmdb(
+export async function hydratePrivateLibraryItem(
   item: PrivateLibraryItem,
 ): Promise<PrivateLibraryItem> {
   if (!(await isTmdbEnabled())) {
@@ -1149,49 +1149,6 @@ async function enrichItemWithTmdb(
   };
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0) {
-    return [];
-  }
-
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-
-  const workers = Array.from({
-    length: Math.min(limit, items.length),
-  }).map(async () => {
-    while (nextIndex < items.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
-}
-
-async function finalizeScannedItems(
-  connector: PrivateLibraryConnector,
-  items: PrivateLibraryItem[],
-): Promise<PrivateLibraryItem[]> {
-  return mapWithConcurrency(
-    items,
-    connector.type === 'xiaoya' ? 4 : 6,
-    async (item) => {
-      try {
-        return await enrichItemWithTmdb(item);
-      } catch {
-        return item;
-      }
-    },
-  );
-}
-
 async function scanOpenList(
   connector: PrivateLibraryConnector,
 ): Promise<PrivateLibraryItem[]> {
@@ -1246,7 +1203,7 @@ async function scanOpenList(
     }
   }
 
-  return finalizeScannedItems(connector, items);
+  return items;
 }
 
 function buildInitialXiaoyaContext(
@@ -1402,7 +1359,7 @@ async function scanXiaoya(
     scannedAt,
   );
 
-  return finalizeScannedItems(connector, items);
+  return items;
 }
 
 async function scanEmbyLike(
@@ -1475,7 +1432,7 @@ async function scanEmbyLike(
     });
   }
 
-  return finalizeScannedItems(connector, items);
+  return items;
 }
 
 function getConnectorCacheKey(connectorId: string): string {
@@ -1502,6 +1459,7 @@ export function formatPrivateLibrarySourceName(
 ): string {
   return (
     sanitizeString(connector.displayName) ||
+    sanitizeString(connector.name) ||
     getPrivateLibraryConnectorTypeLabel(connector.type)
   );
 }

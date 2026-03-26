@@ -46,6 +46,7 @@ interface LibraryConnector {
   id: string;
   name: string;
   displayName?: string;
+  sourceName?: string;
   type: ConnectorType;
   typeLabel: string;
 }
@@ -62,6 +63,11 @@ interface PaginationPayload {
   limit: number;
   hasMore: boolean;
   nextOffset: number;
+}
+
+interface LibraryStatusResponse {
+  enabled: boolean;
+  connectors: LibraryConnector[];
 }
 
 const PAGE_SIZE = 24;
@@ -139,6 +145,48 @@ function formatSourceLabel(item: LibraryItem): string {
   return item.connectorSourceName;
 }
 
+function mergeLibraryItems(
+  currentItems: LibraryItem[],
+  nextItems: LibraryItem[],
+): LibraryItem[] {
+  const merged = new Map<string, LibraryItem>();
+
+  for (const item of currentItems) {
+    merged.set(`${item.connectorId}:${item.sourceItemId}`, item);
+  }
+
+  for (const item of nextItems) {
+    merged.set(`${item.connectorId}:${item.sourceItemId}`, item);
+  }
+
+  return Array.from(merged.values());
+}
+
+function getConnectorUiLabel(
+  connector: LibraryConnector,
+  connectors: LibraryConnector[],
+): string {
+  const baseLabel =
+    connector.sourceName?.trim() ||
+    connector.displayName?.trim() ||
+    connector.name ||
+    connector.typeLabel;
+  const duplicateCount = connectors.filter((item) => {
+    const itemLabel =
+      item.sourceName?.trim() ||
+      item.displayName?.trim() ||
+      item.name ||
+      item.typeLabel;
+    return itemLabel === baseLabel;
+  }).length;
+
+  if (duplicateCount <= 1) {
+    return baseLabel;
+  }
+
+  return `${baseLabel} · ${connector.id.slice(-4)}`;
+}
+
 function toSortLabel(mode: SortMode): string {
   switch (mode) {
     case 'title':
@@ -158,13 +206,15 @@ export default function MyLibraryPage() {
   const searchParams = useSearchParams();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [connectors, setConnectors] = useState<LibraryConnector[]>([]);
+  const [connectorsLoaded, setConnectorsLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [connectorErrors, setConnectorErrors] = useState<LibraryErrorItem[]>(
     [],
   );
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [pagination, setPagination] = useState<PaginationPayload | null>(null);
   const [keyword, setKeyword] = useState(searchParams.get('q') || '');
 
   const sourceFilter = searchParams.get('source') || 'all';
@@ -172,6 +222,33 @@ export default function MyLibraryPage() {
   const yearFilter = searchParams.get('year') || 'all';
   const languageFilter = searchParams.get('language') || 'all';
   const sortFilter = (searchParams.get('sort') || 'recent') as SortMode;
+  const searchKeyword = (searchParams.get('q') || '').trim();
+  const hasExplicitSourceParam = searchParams.has('source');
+
+  const fetchConnectors = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/private-library/status', {
+        cache: 'no-store',
+      });
+      const data = (await resp.json()) as LibraryStatusResponse & {
+        error?: string;
+      };
+
+      if (!resp.ok) {
+        throw new Error(data.error || '读取影库来源失败');
+      }
+
+      setConnectors(data.connectors || []);
+    } catch (currentError) {
+      setError(
+        currentError instanceof Error
+          ? currentError.message
+          : '读取影库来源失败',
+      );
+    } finally {
+      setConnectorsLoaded(true);
+    }
+  }, []);
 
   const updateQuery = useCallback(
     (patch: Record<string, string | null>) => {
@@ -205,58 +282,111 @@ export default function MyLibraryPage() {
     return () => window.clearTimeout(timer);
   }, [keyword, updateQuery]);
 
-  const fetchItems = useCallback(async (forceRefresh = false) => {
-    if (forceRefresh) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-
-    try {
-      setError('');
-      const query = new URLSearchParams();
-      query.set('all', '1');
-      if (forceRefresh) {
-        query.set('refresh', '1');
+  const loadItems = useCallback(
+    async ({
+      forceRefresh = false,
+      append = false,
+      offset = 0,
+    }: {
+      forceRefresh?: boolean;
+      append?: boolean;
+      offset?: number;
+    } = {}) => {
+      if (append) {
+        setLoadingMore(true);
+      } else if (forceRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
       }
 
-      const resp = await fetch(`/api/private-library/items?${query}`, {
-        cache: 'no-store',
-      });
-      const data = (await resp.json()) as {
-        items?: LibraryItem[];
-        connectors?: LibraryConnector[];
-        errors?: LibraryErrorItem[];
-        error?: string;
-        details?: string;
-        pagination?: PaginationPayload;
-      };
+      try {
+        setError('');
+        const query = new URLSearchParams();
+        query.set('limit', String(PAGE_SIZE));
+        query.set('offset', String(offset));
+        if (forceRefresh) {
+          query.set('refresh', '1');
+        }
+        if (sourceFilter !== 'all') {
+          query.set('connectorId', sourceFilter);
+        }
+        if (searchKeyword) {
+          query.set('q', searchKeyword);
+        }
 
-      if (!resp.ok) {
-        throw new Error(data.error || data.details || '读取私人影库失败');
+        const resp = await fetch(`/api/private-library/items?${query}`, {
+          cache: 'no-store',
+        });
+        const data = (await resp.json()) as {
+          items?: LibraryItem[];
+          connectors?: LibraryConnector[];
+          errors?: LibraryErrorItem[];
+          error?: string;
+          details?: string;
+          pagination?: PaginationPayload;
+        };
+
+        if (!resp.ok) {
+          throw new Error(data.error || data.details || '读取私人影库失败');
+        }
+
+        const nextItems = data.items || [];
+        setItems((currentItems) =>
+          append ? mergeLibraryItems(currentItems, nextItems) : nextItems,
+        );
+        setPagination(data.pagination || null);
+        if ((data.connectors || []).length > 0) {
+          setConnectors(data.connectors || []);
+        }
+        setConnectorErrors(data.errors || []);
+      } catch (currentError) {
+        if (!append) {
+          setItems([]);
+          setPagination(null);
+          setConnectorErrors([]);
+        }
+        setError(
+          currentError instanceof Error
+            ? currentError.message
+            : '读取私人影库失败',
+        );
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+        setLoadingMore(false);
       }
-
-      setItems(data.items || []);
-      setConnectors(data.connectors || []);
-      setConnectorErrors(data.errors || []);
-    } catch (currentError) {
-      setItems([]);
-      setConnectors([]);
-      setConnectorErrors([]);
-      setError(
-        currentError instanceof Error
-          ? currentError.message
-          : '读取私人影库失败',
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+    },
+    [searchKeyword, sourceFilter],
+  );
 
   useEffect(() => {
-    void fetchItems(false);
-  }, [fetchItems]);
+    void fetchConnectors();
+  }, [fetchConnectors]);
+
+  useEffect(() => {
+    if (!connectorsLoaded) {
+      return;
+    }
+
+    if (
+      connectors.length > 1 &&
+      sourceFilter === 'all' &&
+      !hasExplicitSourceParam
+    ) {
+      updateQuery({ source: connectors[0].id });
+      return;
+    }
+
+    void loadItems();
+  }, [
+    connectors,
+    connectorsLoaded,
+    hasExplicitSourceParam,
+    loadItems,
+    sourceFilter,
+    updateQuery,
+  ]);
 
   const sourceOptions = useMemo(() => {
     if (connectors.length <= 1) {
@@ -265,7 +395,7 @@ export default function MyLibraryPage() {
 
     return connectors.map((connector) => ({
       value: connector.id,
-      label: connector.displayName?.trim() || connector.typeLabel,
+      label: getConnectorUiLabel(connector, connectors),
       type: connector.type,
     }));
   }, [connectors]);
@@ -287,7 +417,7 @@ export default function MyLibraryPage() {
   }, [items]);
 
   const filteredItems = useMemo(() => {
-    const keywordQuery = normalizeText(searchParams.get('q') || '');
+    const keywordQuery = normalizeText(searchKeyword);
 
     const next = items
       .filter((item) => {
@@ -340,28 +470,12 @@ export default function MyLibraryPage() {
   }, [
     items,
     languageFilter,
-    searchParams,
+    searchKeyword,
     sortFilter,
     sourceFilter,
     typeFilter,
     yearFilter,
   ]);
-
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [
-    sourceFilter,
-    typeFilter,
-    yearFilter,
-    languageFilter,
-    sortFilter,
-    searchParams,
-  ]);
-
-  const visibleItems = useMemo(
-    () => filteredItems.slice(0, visibleCount),
-    [filteredItems, visibleCount],
-  );
 
   const activeSourceName = useMemo(() => {
     if (sourceFilter === 'all') {
@@ -371,7 +485,11 @@ export default function MyLibraryPage() {
     const connector = connectors.find(
       (item) => item.id === sourceFilter || item.type === sourceFilter,
     );
-    return connector?.displayName?.trim() || connector?.typeLabel || '当前来源';
+    return (
+      (connector ? getConnectorUiLabel(connector, connectors) : '') ||
+      connector?.typeLabel ||
+      '当前来源'
+    );
   }, [connectors, sourceFilter]);
 
   const activeTypeLabel = useMemo(() => {
@@ -519,7 +637,7 @@ export default function MyLibraryPage() {
             </label>
             <button
               type='button'
-              onClick={() => void fetchItems(true)}
+              onClick={() => void loadItems({ forceRefresh: true })}
               className='inline-flex items-center justify-center gap-2 rounded-xl border border-slate-600/70 bg-slate-900/45 px-4 py-2.5 text-sm text-slate-100 transition-colors hover:border-emerald-400/50 hover:text-emerald-200'
             >
               {refreshing ? (
@@ -699,16 +817,20 @@ export default function MyLibraryPage() {
         {!loading && !error && filteredItems.length > 0 ? (
           <>
             <section className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6'>
-              {visibleItems.map((item) => renderCard(item))}
+              {filteredItems.map((item) => renderCard(item))}
             </section>
 
-            {visibleCount < filteredItems.length ? (
+            {pagination?.hasMore ? (
               <div className='flex justify-center'>
                 <button
                   type='button'
                   onClick={() =>
-                    setVisibleCount((current) => current + PAGE_SIZE)
+                    void loadItems({
+                      append: true,
+                      offset: pagination?.nextOffset || items.length,
+                    })
                   }
+                  disabled={loadingMore}
                   className='rounded-xl border border-slate-600/70 bg-slate-900/55 px-5 py-2.5 text-sm text-slate-100 transition-colors hover:border-emerald-400/50 hover:text-emerald-200'
                 >
                   加载更多

@@ -6,7 +6,9 @@ import {
   getConnectorCachedItems,
   getPrivateLibraryConfig,
   getPrivateLibraryConnectorTypeLabel,
+  hydratePrivateLibraryItem,
   type PrivateLibraryConnectorType,
+  type PrivateLibraryItem,
   scanConnector,
   toPrivateLibraryErrorMessage,
 } from '@/lib/private-library';
@@ -46,6 +48,7 @@ interface ConnectorPayload {
   id: string;
   name: string;
   displayName?: string;
+  sourceName: string;
   type: PrivateLibraryConnectorType;
   typeLabel: string;
 }
@@ -54,6 +57,12 @@ interface ErrorPayload {
   connectorId: string;
   connectorName: string;
   error: string;
+}
+
+interface MergedLibraryItem extends PrivateLibraryItem {
+  connectorName: string;
+  connectorDisplayName?: string;
+  connectorSourceName: string;
 }
 
 function parsePositiveInt(
@@ -69,7 +78,9 @@ function parsePositiveInt(
   return Math.min(Math.floor(parsed), max);
 }
 
-function sortItems(items: LibraryItemPayload[]): LibraryItemPayload[] {
+function sortItems<
+  T extends { scannedAt: number; sortKey: number; title: string },
+>(items: T[]): T[] {
   return [...items].sort((left, right) => {
     if (right.scannedAt !== left.scannedAt) {
       return right.scannedAt - left.scannedAt;
@@ -83,6 +94,25 @@ function sortItems(items: LibraryItemPayload[]): LibraryItemPayload[] {
   });
 }
 
+function normalizeText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function toSearchHaystack(item: MergedLibraryItem): string {
+  return [
+    item.title,
+    item.searchTitle,
+    item.overview,
+    item.libraryName,
+    item.connectorName,
+    item.connectorSourceName,
+    ...(item.genres || []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
 export async function GET(request: NextRequest) {
   const authResult = verifyApiAuth(request);
   if (!authResult.isValid) {
@@ -94,6 +124,7 @@ export async function GET(request: NextRequest) {
     const connectorIdFilter = (searchParams.get('connectorId') || '').trim();
     const forceRefresh = searchParams.get('refresh') === '1';
     const fetchAll = searchParams.get('all') === '1';
+    const query = (searchParams.get('q') || '').trim();
     const offset = parsePositiveInt(searchParams.get('offset'), 0, 20_000);
     const limit = parsePositiveInt(searchParams.get('limit'), 60, 5_000);
 
@@ -103,7 +134,7 @@ export async function GET(request: NextRequest) {
         item.enabled && (!connectorIdFilter || item.id === connectorIdFilter),
     );
 
-    const merged: LibraryItemPayload[] = [];
+    const merged: MergedLibraryItem[] = [];
     const connectors: ConnectorPayload[] = [];
     const errors: ErrorPayload[] = [];
 
@@ -112,6 +143,7 @@ export async function GET(request: NextRequest) {
         id: connector.id,
         name: connector.name,
         displayName: connector.displayName,
+        sourceName: formatPrivateLibrarySourceName(connector),
         type: connector.type,
         typeLabel: getPrivateLibraryConnectorTypeLabel(connector.type),
       });
@@ -132,47 +164,80 @@ export async function GET(request: NextRequest) {
 
       for (const item of items) {
         merged.push({
-          id: item.id,
-          title: item.title,
-          year: item.year,
-          tmdbId: item.tmdbId,
-          mediaType: item.mediaType,
-          poster: item.poster || '',
-          connectorId: item.connectorId,
-          connectorType: item.connectorType,
+          ...item,
           connectorName: connector.name,
           connectorDisplayName: connector.displayName,
           connectorSourceName: formatPrivateLibrarySourceName(connector),
-          sourceItemId: item.sourceItemId,
-          streamPath: item.streamPath,
-          season: item.season,
-          episode: item.episode,
-          overview: item.overview,
-          genres: item.genres,
-          libraryName: item.libraryName,
-          originalLanguage: item.originalLanguage,
-          tmdbRating: item.tmdbRating,
-          runtimeMinutes: item.runtimeMinutes,
-          episodeCount: item.episodeCount,
-          seasonCount: item.seasonCount,
-          isAnime: item.isAnime,
-          scannedAt: item.scannedAt,
-          sortKey: item.sortKey,
         });
       }
     }
 
-    const sorted = sortItems(merged);
-    const items = fetchAll ? sorted : sorted.slice(offset, offset + limit);
+    const normalizedQuery = normalizeText(query);
+    const filtered = sortItems(
+      merged.filter((item) =>
+        normalizedQuery
+          ? toSearchHaystack(item).includes(normalizedQuery)
+          : true,
+      ),
+    );
+    const pageItems = fetchAll
+      ? filtered
+      : filtered.slice(offset, offset + limit);
+    const items = await Promise.all(
+      pageItems.map(async (item) => {
+        let hydrated: MergedLibraryItem = item;
+        try {
+          const hydratedBase = await hydratePrivateLibraryItem(item);
+          hydrated = {
+            ...item,
+            ...hydratedBase,
+            connectorName: item.connectorName,
+            connectorDisplayName: item.connectorDisplayName,
+            connectorSourceName: item.connectorSourceName,
+          };
+        } catch {
+          hydrated = item;
+        }
+
+        return {
+          id: hydrated.id,
+          title: hydrated.title,
+          year: hydrated.year,
+          tmdbId: hydrated.tmdbId,
+          mediaType: hydrated.mediaType,
+          poster: hydrated.poster || '',
+          connectorId: hydrated.connectorId,
+          connectorType: hydrated.connectorType,
+          connectorName: hydrated.connectorName,
+          connectorDisplayName: hydrated.connectorDisplayName,
+          connectorSourceName: hydrated.connectorSourceName,
+          sourceItemId: hydrated.sourceItemId,
+          streamPath: hydrated.streamPath,
+          season: hydrated.season,
+          episode: hydrated.episode,
+          overview: hydrated.overview,
+          genres: hydrated.genres,
+          libraryName: hydrated.libraryName,
+          originalLanguage: hydrated.originalLanguage,
+          tmdbRating: hydrated.tmdbRating,
+          runtimeMinutes: hydrated.runtimeMinutes,
+          episodeCount: hydrated.episodeCount,
+          seasonCount: hydrated.seasonCount,
+          isAnime: hydrated.isAnime,
+          scannedAt: hydrated.scannedAt,
+          sortKey: hydrated.sortKey,
+        } satisfies LibraryItemPayload;
+      }),
+    );
 
     return NextResponse.json({
       items,
       connectors,
       pagination: {
-        total: sorted.length,
+        total: filtered.length,
         offset,
-        limit: fetchAll ? sorted.length : limit,
-        hasMore: fetchAll ? false : offset + items.length < sorted.length,
+        limit: fetchAll ? filtered.length : limit,
+        hasMore: fetchAll ? false : offset + items.length < filtered.length,
         nextOffset: offset + items.length,
       },
       ...(errors.length > 0 ? { errors } : {}),
