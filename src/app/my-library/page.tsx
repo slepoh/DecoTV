@@ -207,6 +207,7 @@ export default function MyLibraryPage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [connectors, setConnectors] = useState<LibraryConnector[]>([]);
   const [connectorsLoaded, setConnectorsLoaded] = useState(false);
+  const [initialSourceResolved, setInitialSourceResolved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -263,6 +264,10 @@ export default function MyLibraryPage() {
       });
 
       const queryString = next.toString();
+      if (queryString === searchParams.toString()) {
+        return;
+      }
+
       router.replace(queryString ? `${pathname}?${queryString}` : pathname, {
         scroll: false,
       });
@@ -336,9 +341,6 @@ export default function MyLibraryPage() {
           append ? mergeLibraryItems(currentItems, nextItems) : nextItems,
         );
         setPagination(data.pagination || null);
-        if ((data.connectors || []).length > 0) {
-          setConnectors(data.connectors || []);
-        }
         setConnectorErrors(data.errors || []);
       } catch (currentError) {
         if (!append) {
@@ -369,12 +371,26 @@ export default function MyLibraryPage() {
       return;
     }
 
+    if (!initialSourceResolved) {
+      setInitialSourceResolved(true);
+
+      if (
+        connectors.length > 1 &&
+        sourceFilter === 'all' &&
+        !hasExplicitSourceParam
+      ) {
+        updateQuery({ source: connectors[0].id });
+        return;
+      }
+    }
+
     if (
-      connectors.length > 1 &&
-      sourceFilter === 'all' &&
-      !hasExplicitSourceParam
+      hasExplicitSourceParam &&
+      sourceFilter !== 'all' &&
+      connectors.length > 0 &&
+      !connectors.some((item) => item.id === sourceFilter)
     ) {
-      updateQuery({ source: connectors[0].id });
+      updateQuery({ source: null });
       return;
     }
 
@@ -383,6 +399,7 @@ export default function MyLibraryPage() {
     connectors,
     connectorsLoaded,
     hasExplicitSourceParam,
+    initialSourceResolved,
     loadItems,
     sourceFilter,
     updateQuery,

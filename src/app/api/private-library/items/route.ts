@@ -129,25 +129,25 @@ export async function GET(request: NextRequest) {
     const limit = parsePositiveInt(searchParams.get('limit'), 60, 5_000);
 
     const cfg = await getPrivateLibraryConfig();
-    const enabled = cfg.connectors.filter(
-      (item) =>
-        item.enabled && (!connectorIdFilter || item.id === connectorIdFilter),
+    const allEnabledConnectors = cfg.connectors.filter((item) => item.enabled);
+    const targetConnectors = allEnabledConnectors.filter(
+      (item) => !connectorIdFilter || item.id === connectorIdFilter,
     );
 
     const merged: MergedLibraryItem[] = [];
-    const connectors: ConnectorPayload[] = [];
-    const errors: ErrorPayload[] = [];
-
-    for (const connector of enabled) {
-      connectors.push({
+    const connectors: ConnectorPayload[] = allEnabledConnectors.map(
+      (connector) => ({
         id: connector.id,
         name: connector.name,
         displayName: connector.displayName,
         sourceName: formatPrivateLibrarySourceName(connector),
         type: connector.type,
         typeLabel: getPrivateLibraryConnectorTypeLabel(connector.type),
-      });
+      }),
+    );
+    const errors: ErrorPayload[] = [];
 
+    for (const connector of targetConnectors) {
       let items = forceRefresh ? [] : getConnectorCachedItems(connector.id);
       if (items.length === 0) {
         try {
