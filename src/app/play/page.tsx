@@ -463,13 +463,12 @@ function PlayPageClient() {
   const isPrivateLibrarySource = (source: string) =>
     source === 'private_library';
 
-  const getPlayRecordStorageSource = (source: string, id: string) => {
+  const getPlayRecordStorageSource = (source: string, _id: string) => {
     if (!isPrivateLibrarySource(source)) {
       return source;
     }
 
-    const connectorId = id.split(':')[0] || 'private-library';
-    return `private-progress:${connectorId}`;
+    return 'private_library';
   };
 
   const getPrivatePlaybackIdentity = () => {
@@ -2115,8 +2114,22 @@ function PlayPageClient() {
         play_time: Math.floor(currentTime),
         total_time: Math.floor(duration),
         save_time: Date.now(),
-        search_title: searchTitle,
+        search_title: searchTitle || videoTitleRef.current,
       });
+
+      if (isPrivateLibrarySource(currentSourceRef.current)) {
+        const { connectorId } = getPrivatePlaybackIdentity();
+        if (connectorId) {
+          try {
+            await deletePlayRecord(
+              `private-progress:${connectorId}`,
+              currentIdRef.current,
+            );
+          } catch {
+            // Ignore legacy cleanup failures.
+          }
+        }
+      }
 
       lastSaveTimeRef.current = Date.now();
       console.log('播放进度已保存:', {

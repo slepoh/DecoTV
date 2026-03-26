@@ -6,7 +6,6 @@ import { getConfig } from './config';
 import { db } from './db';
 import { normalizePrivateLibraryConfig } from './private-library-config';
 import { getServerCache, setServerCache } from './server-cache';
-import type { PlayRecord } from './types';
 
 export type PrivateLibraryConnectorType = 'openlist' | 'emby' | 'jellyfin';
 
@@ -708,31 +707,15 @@ function buildPrivateProgressKey(
   return `private:progress:${username}:${connectorType}:${sourceItemId}`;
 }
 
-function ticksToSeconds(ticks?: number): number {
-  const parsed = parseTick(ticks);
-  return Math.floor(parsed / 10_000_000);
-}
+function buildPrivateLibraryItemId(
+  connector: Pick<PrivateLibraryConnector, 'id' | 'type'>,
+  sourceItemId: string,
+): string {
+  if (connector.type === 'openlist') {
+    return `${connector.id}:${Buffer.from(sourceItemId).toString('base64url')}`;
+  }
 
-function buildPrivateProgressRecord(
-  connector: PrivateLibraryConnector,
-  payload: PrivateLibraryProgressPayload,
-): PlayRecord {
-  const playTime = ticksToSeconds(payload.positionTicks);
-  const totalTime = ticksToSeconds(payload.runtimeTicks);
-
-  return {
-    title: payload.sourceItemId,
-    source_name: formatPrivateLibrarySourceName(connector),
-    cover: '',
-    year: '',
-    index: 1,
-    total_episodes: 1,
-    play_time:
-      payload.event === 'played' && totalTime > 0 ? totalTime : playTime,
-    total_time: totalTime,
-    save_time: Date.now(),
-    search_title: payload.sourceItemId,
-  };
+  return `${connector.id}:${sourceItemId}`;
 }
 
 export async function scanConnector(
@@ -887,25 +870,19 @@ export async function reportPrivateLibraryProgress(
   }
 
   try {
-    const progressKey = buildPrivateProgressKey(
+    const legacyProgressKey = buildPrivateProgressKey(
       username,
       connector.type,
       payload.sourceItemId,
     );
-    await db.savePlayRecordByKey(
+    await db.deletePlayRecordByKey(username, legacyProgressKey);
+    await db.deletePlayRecord(
       username,
-      progressKey,
-      buildPrivateProgressRecord(connector, payload),
+      `private-progress:${connector.id}`,
+      buildPrivateLibraryItemId(connector, payload.sourceItemId),
     );
-  } catch (error) {
-    return {
-      ok: false,
-      synced: false,
-      detail:
-        error instanceof Error
-          ? error.message
-          : 'Failed to save private library progress.',
-    };
+  } catch {
+    // Ignore legacy cleanup failures. Public play history is now saved from the player page.
   }
 
   if (connector.type === 'openlist') {

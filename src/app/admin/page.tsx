@@ -8542,6 +8542,54 @@ const PrivateLibraryConfigPanel = ({
     setConnectors(config?.PrivateLibraryConfig?.connectors || []);
   }, [config?.PrivateLibraryConfig?.connectors]);
 
+  const persistConnectors = async (
+    nextConnectors: PrivateLibraryConnector[],
+    options?: {
+      skipValidation?: boolean;
+      successMessage?: string;
+      errorMessage?: string;
+      rollback?: () => void;
+    },
+  ) => {
+    const validationError = options?.skipValidation
+      ? undefined
+      : nextConnectors
+          .filter((connector) => connector.enabled)
+          .map((connector) => validatePrivateConnector(connector))
+          .find(Boolean);
+
+    if (validationError) {
+      showError(validationError, showAlert);
+      return;
+    }
+
+    await withLoading('savePrivateLibraryConfig', async () => {
+      try {
+        const response = await fetch('/api/admin/private-library', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectors: nextConnectors }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || '保存失败');
+        }
+        await refreshConfig();
+        showSuccess(
+          options?.successMessage || '私人影库配置保存成功',
+          showAlert,
+        );
+      } catch (error) {
+        options?.rollback?.();
+        showError(
+          options?.errorMessage ||
+            `保存私人影库配置失败：${error instanceof Error ? error.message : '未知错误'}`,
+          showAlert,
+        );
+      }
+    });
+  };
+
   const patchConnector = (
     connectorId: string,
     patch: Partial<PrivateLibraryConnector>,
@@ -8569,6 +8617,8 @@ const PrivateLibraryConfigPanel = ({
 
   const handleDeleteConnector = (connectorId: string) => {
     const target = connectors.find((item) => item.id === connectorId);
+    const previousConnectors = connectors;
+    const previousScanResult = scanResult;
     showAlert({
       type: 'warning',
       title: '删除连接',
@@ -8577,47 +8627,30 @@ const PrivateLibraryConfigPanel = ({
       confirmText: '删除',
       cancelText: '取消',
       onConfirm: () => {
-        setConnectors((prev) => prev.filter((item) => item.id !== connectorId));
-        setScanResult((prev) => {
-          const next = { ...prev };
-          delete next[connectorId];
-          return next;
+        const nextConnectors = previousConnectors.filter(
+          (item) => item.id !== connectorId,
+        );
+        const nextScanResult = { ...previousScanResult };
+        delete nextScanResult[connectorId];
+
+        setConnectors(nextConnectors);
+        setScanResult(nextScanResult);
+
+        void persistConnectors(nextConnectors, {
+          skipValidation: true,
+          successMessage: '私人影库连接已删除',
+          errorMessage: `删除私人影库连接失败：${target?.name || '该连接'} 未能删除`,
+          rollback: () => {
+            setConnectors(previousConnectors);
+            setScanResult(previousScanResult);
+          },
         });
       },
     });
   };
 
   const handleSave = async () => {
-    const validationError = connectors
-      .filter((connector) => connector.enabled)
-      .map((connector) => validatePrivateConnector(connector))
-      .find(Boolean);
-
-    if (validationError) {
-      showError(validationError, showAlert);
-      return;
-    }
-
-    await withLoading('savePrivateLibraryConfig', async () => {
-      try {
-        const response = await fetch('/api/admin/private-library', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ connectors }),
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(data.error || '保存失败');
-        }
-        await refreshConfig();
-        showSuccess('私人影库配置保存成功', showAlert);
-      } catch (error) {
-        showError(
-          `保存私人影库配置失败：${error instanceof Error ? error.message : '未知错误'}`,
-          showAlert,
-        );
-      }
-    });
+    await persistConnectors(connectors);
   };
 
   const handleTest = async (connector: PrivateLibraryConnector) => {
@@ -8991,6 +9024,9 @@ const PrivateLibraryConfigPanel = ({
         message={alertModal.message}
         timer={alertModal.timer}
         showConfirm={alertModal.showConfirm}
+        onConfirm={alertModal.onConfirm}
+        confirmText={alertModal.confirmText}
+        cancelText={alertModal.cancelText}
       />
     </div>
   );
