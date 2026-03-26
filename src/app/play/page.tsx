@@ -9,7 +9,14 @@ import Hls from 'hls.js';
 import { Download, Heart, LoaderCircle } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   deleteFavorite,
@@ -85,6 +92,22 @@ interface AudioTrack {
   lang?: string;
   isDefault: boolean;
   hlsIndex?: number;
+}
+
+interface HlsAudioTrackEntry {
+  id?: number;
+  name?: string;
+  lang?: string;
+  default?: boolean;
+}
+
+interface HlsAudioTrackSwitchPayload {
+  id?: number;
+}
+
+interface AudioTrackSelectorItem {
+  trackId: number;
+  trackHlsIndex?: number;
 }
 
 interface DanmukuSettings {
@@ -274,6 +297,14 @@ function escapeAudioTrackHtml(rawValue: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function isLikelyHlsUrl(url: string): boolean {
+  if (!url) {
+    return false;
+  }
+
+  return /\.m3u8(?:$|[?#])/i.test(url) || /\/m3u8(?:$|[/?#])/i.test(url);
 }
 
 function sanitizePlaybackRate(value: unknown): number {
@@ -684,6 +715,40 @@ function PlayPageClient() {
     (detail?.connector_type === 'emby' ||
       detail?.connector_type === 'jellyfin');
 
+  const resetAudioTrackState = useCallback(() => {
+    setAudioTracks([]);
+    setCurrentAudioTrack(-1);
+    setIsAudioTrackSwitching(false);
+  }, []);
+
+  const resolveActiveHlsTrackIndex = useCallback(
+    (
+      hls: Hls,
+      tracks: AudioTrack[],
+      payload?: HlsAudioTrackSwitchPayload,
+    ): number => {
+      if (typeof hls.audioTrack === 'number' && hls.audioTrack >= 0) {
+        return hls.audioTrack;
+      }
+
+      const switchedId =
+        typeof payload?.id === 'number' && payload.id >= 0 ? payload.id : -1;
+      if (switchedId >= 0) {
+        const matchedTrack = tracks.find(
+          (track) => track.id === switchedId || track.hlsIndex === switchedId,
+        );
+        if (typeof matchedTrack?.hlsIndex === 'number') {
+          return matchedTrack.hlsIndex;
+        }
+
+        return switchedId;
+      }
+
+      return -1;
+    },
+    [],
+  );
+
   const currentAudioTrackName = useMemo(() => {
     const selected = audioTracks.find((track) =>
       typeof track.hlsIndex === 'number'
@@ -885,13 +950,11 @@ function PlayPageClient() {
   };
 
   useEffect(() => {
-    setAudioTracks([]);
-    setCurrentAudioTrack(-1);
-    setIsAudioTrackSwitching(false);
+    resetAudioTrackState();
     privateProgressPausedRef.current = false;
     pendingPrivateAudioSwitchRef.current = false;
     preferredAudioScopeRef.current = '';
-  }, [currentSource, currentId, currentEpisodeIndex]);
+  }, [currentSource, currentId, currentEpisodeIndex, resetAudioTrackState]);
 
   useEffect(() => {
     if (!isPrivateEmbyLikeSource || !detail) {
@@ -900,8 +963,7 @@ function PlayPageClient() {
 
     const rawTracks = detail.private_audio_streams || [];
     if (rawTracks.length < 2) {
-      setAudioTracks([]);
-      setCurrentAudioTrack(-1);
+      resetAudioTrackState();
       return;
     }
 
@@ -927,8 +989,7 @@ function PlayPageClient() {
       .sort((left, right) => left.id - right.id);
 
     if (mappedTracks.length < 2) {
-      setAudioTracks([]);
-      setCurrentAudioTrack(-1);
+      resetAudioTrackState();
       return;
     }
 
@@ -970,7 +1031,25 @@ function PlayPageClient() {
     if (targetUrl && targetUrl !== activeUrl) {
       setVideoUrl(targetUrl);
     }
-  }, [currentEpisodeIndex, detail, isPrivateEmbyLikeSource, videoUrl]);
+  }, [
+    currentEpisodeIndex,
+    detail,
+    isPrivateEmbyLikeSource,
+    resetAudioTrackState,
+    videoUrl,
+  ]);
+
+  useEffect(() => {
+    if (!videoUrl) {
+      return;
+    }
+
+    if (isPrivateEmbyLikeSource || isLikelyHlsUrl(videoUrl)) {
+      return;
+    }
+
+    resetAudioTrackState();
+  }, [isPrivateEmbyLikeSource, resetAudioTrackState, videoUrl]);
 
   const handleAudioTrackSelect = async (track: AudioTrack) => {
     if (typeof track.hlsIndex === 'number') {
@@ -1053,9 +1132,10 @@ function PlayPageClient() {
         ? '<i class="art-icon flex art-audio-track-trigger"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" stroke-opacity="0.35"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i><span style="font-size:12px;line-height:1;">音轨</span>'
         : `<i class="art-icon flex art-audio-track-trigger"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 9v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9 7v10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M17 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i><span style="font-size:12px;line-height:1;">音轨</span><span style="max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;opacity:0.85;">${escapedCurrentTrackName}</span>`,
       selector,
-      onSelect: function (selectorItem: any) {
-        const selectedTrackId = Number(selectorItem.trackId);
-        const selectedTrackHlsIndex = Number(selectorItem.trackHlsIndex);
+      onSelect: function (selectorItem: unknown) {
+        const payload = (selectorItem || {}) as Partial<AudioTrackSelectorItem>;
+        const selectedTrackId = Number(payload.trackId);
+        const selectedTrackHlsIndex = Number(payload.trackHlsIndex);
         const selectedTrack = audioTracksRef.current.find((track) => {
           if (track.id !== selectedTrackId) {
             return false;
@@ -2881,46 +2961,48 @@ function PlayPageClient() {
 
             hls.on(
               Hls.Events.AUDIO_TRACKS_UPDATED,
-              (_event: any, data: any) => {
+              (
+                _event: string,
+                data: { audioTracks?: HlsAudioTrackEntry[] },
+              ) => {
                 const nextTracks = (
                   Array.isArray(data?.audioTracks)
                     ? data.audioTracks
                     : Array.isArray(hls.audioTracks)
                       ? hls.audioTracks
                       : []
-                ) as Array<{
-                  id?: number;
-                  name?: string;
-                  lang?: string;
-                  default?: boolean;
-                }>;
+                ) as HlsAudioTrackEntry[];
 
                 if (nextTracks.length < 2) {
-                  setAudioTracks([]);
-                  setCurrentAudioTrack(-1);
+                  resetAudioTrackState();
                   return;
                 }
 
-                const mappedTracks = nextTracks.map((track, index) => ({
-                  id:
-                    typeof track.id === 'number' && Number.isFinite(track.id)
-                      ? track.id
-                      : index,
-                  name: resolveAudioTrackName(track.name, track.lang, index),
-                  lang: track.lang,
-                  isDefault: Boolean(track.default),
-                  hlsIndex: index,
-                }));
+                const mappedTracks: AudioTrack[] = nextTracks.map(
+                  (track, index) => ({
+                    id:
+                      typeof track.id === 'number' && Number.isFinite(track.id)
+                        ? track.id
+                        : index,
+                    name: resolveAudioTrackName(track.name, track.lang, index),
+                    lang: track.lang,
+                    isDefault: Boolean(track.default),
+                    hlsIndex: index,
+                  }),
+                );
 
                 setAudioTracks(mappedTracks);
-                const activeHlsIndex =
-                  typeof hls.audioTrack === 'number' && hls.audioTrack >= 0
-                    ? hls.audioTrack
-                    : (mappedTracks.find((track) => track.isDefault)
-                        ?.hlsIndex ??
-                      mappedTracks[0].hlsIndex ??
-                      -1);
-                setCurrentAudioTrack(activeHlsIndex);
+                const activeHlsIndex = resolveActiveHlsTrackIndex(
+                  hls,
+                  mappedTracks,
+                );
+                const fallbackHlsIndex =
+                  mappedTracks.find((track) => track.isDefault)?.hlsIndex ??
+                  mappedTracks[0].hlsIndex ??
+                  -1;
+                setCurrentAudioTrack(
+                  activeHlsIndex >= 0 ? activeHlsIndex : fallbackHlsIndex,
+                );
 
                 const preferredAudioLang = loadPreferredAudioLang();
                 if (!preferredAudioLang) {
@@ -2935,7 +3017,8 @@ function PlayPageClient() {
                 if (
                   preferredTrack &&
                   typeof preferredTrack.hlsIndex === 'number' &&
-                  preferredTrack.hlsIndex !== hls.audioTrack
+                  preferredTrack.hlsIndex !==
+                    (activeHlsIndex >= 0 ? activeHlsIndex : fallbackHlsIndex)
                 ) {
                   hls.audioTrack = preferredTrack.hlsIndex;
                 }
@@ -2944,16 +3027,17 @@ function PlayPageClient() {
 
             hls.on(
               Hls.Events.AUDIO_TRACK_SWITCHED,
-              (_event: any, data: any) => {
-                const switchedIndex =
-                  typeof data?.id === 'number' && data.id >= 0
-                    ? data.id
-                    : hls.audioTrack;
+              (_event: string, data: HlsAudioTrackSwitchPayload) => {
+                const switchedIndex = resolveActiveHlsTrackIndex(
+                  hls,
+                  audioTracksRef.current,
+                  data,
+                );
 
                 setCurrentAudioTrack(switchedIndex);
-                const switchedTrack = Array.isArray(hls.audioTracks)
-                  ? hls.audioTracks[switchedIndex]
-                  : null;
+                const switchedTrack = audioTracksRef.current.find(
+                  (track) => track.hlsIndex === switchedIndex,
+                );
                 savePreferredAudioLang(switchedTrack?.lang);
               },
             );
@@ -3392,7 +3476,15 @@ function PlayPageClient() {
       console.error('创建播放器失败:', err);
       setError('播放器初始化失败');
     }
-  }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled]);
+  }, [
+    Artplayer,
+    Hls,
+    blockAdEnabled,
+    loading,
+    resetAudioTrackState,
+    resolveActiveHlsTrackIndex,
+    videoUrl,
+  ]);
 
   useEffect(() => {
     if (!artPlayerRef.current?.controls?.update) {
