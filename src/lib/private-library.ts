@@ -22,6 +22,9 @@ export interface PrivateLibraryItem {
   streamPath: string;
   season?: number;
   episode?: number;
+  overview?: string;
+  genres?: string[];
+  libraryName?: string;
 }
 
 export interface PrivateLibraryProgressPayload {
@@ -619,9 +622,11 @@ async function scanEmbyLike(
       CollectionType?: string;
       SeriesName?: string;
       ProviderIds?: { Tmdb?: string };
+      Overview?: string;
+      Genres?: string[];
     }>;
   }>(
-    `${connector.serverUrl}/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds,ProductionYear,CollectionType&${authQuery}`,
+    `${connector.serverUrl}/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds,ProductionYear,CollectionType,Overview,Genres&${authQuery}`,
     {
       headers: buildMediaServerHeaders(connector, auth),
     },
@@ -656,6 +661,9 @@ async function scanEmbyLike(
       tmdbId: Number.isFinite(tmdbId || NaN) ? tmdbId : undefined,
       mediaType,
       streamPath: item.Id,
+      overview: sanitizeString(item.Overview),
+      genres: sanitizeStringArray(item.Genres),
+      libraryName: sanitizeString(item.CollectionType),
     });
   }
 
@@ -683,6 +691,13 @@ export function formatPrivateLibrarySourceName(
   connector: Pick<PrivateLibraryConnector, 'type' | 'name'>,
 ): string {
   return `${getPrivateLibraryConnectorTypeLabel(connector.type)} · ${connector.name}`;
+}
+
+export function buildPrivateLibraryPosterUrl(
+  connectorId: string,
+  sourceItemId: string,
+): string {
+  return `/api/private-library/poster?connectorId=${encodeURIComponent(connectorId)}&sourceItemId=${encodeURIComponent(sourceItemId)}`;
 }
 
 function buildPrivateProgressKey(
@@ -824,6 +839,32 @@ export async function resolveStreamRequest(
 
   return {
     url: `${connector.serverUrl}/Videos/${encodeURIComponent(sourceItemId)}/stream?${query.toString()}`,
+    headers: buildMediaServerHeaders(connector, auth),
+  };
+}
+
+export async function resolvePosterRequest(
+  connectorId: string,
+  sourceItemId: string,
+): Promise<{ url: string; headers?: Record<string, string> } | null> {
+  const cfg = await getPrivateLibraryConfig();
+  const connector = cfg.connectors.find(
+    (item) => item.id === connectorId && item.enabled,
+  );
+  if (!connector || connector.type === 'openlist') {
+    return null;
+  }
+
+  const auth = await resolveMediaServerAuth(connector);
+  const query = new URLSearchParams();
+  query.set('quality', '90');
+  query.set('maxWidth', '500');
+  if (auth.accessToken) {
+    query.set('api_key', auth.accessToken);
+  }
+
+  return {
+    url: `${connector.serverUrl}/Items/${encodeURIComponent(sourceItemId)}/Images/Primary?${query.toString()}`,
     headers: buildMediaServerHeaders(connector, auth),
   };
 }

@@ -4,6 +4,7 @@ import { getAuthInfoFromCookie, verifyApiAuth } from '@/lib/auth';
 import { getAvailableApiSites, getCacheTime } from '@/lib/config';
 import { getDetailFromApi } from '@/lib/downstream';
 import {
+  buildPrivateLibraryPosterUrl,
   formatPrivateLibrarySourceName,
   getConnectorCachedItems,
   getPrivateLibraryConfig,
@@ -72,8 +73,14 @@ export async function GET(request: NextRequest) {
         }
 
         let title = target.title;
-        let poster = '';
-        let desc = '';
+        let poster =
+          connector.type === 'openlist'
+            ? ''
+            : buildPrivateLibraryPosterUrl(
+                target.connectorId,
+                target.sourceItemId,
+              );
+        let desc = target.overview || '';
 
         if (target.tmdbId) {
           try {
