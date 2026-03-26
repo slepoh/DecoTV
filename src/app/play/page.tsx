@@ -632,7 +632,6 @@ function PlayPageClient() {
   });
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
   const [currentAudioTrack, setCurrentAudioTrack] = useState(-1);
-  const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const [isAudioTrackSwitching, setIsAudioTrackSwitching] = useState(false);
 
   const audioTracksRef = useRef<AudioTrack[]>([]);
@@ -888,7 +887,6 @@ function PlayPageClient() {
   useEffect(() => {
     setAudioTracks([]);
     setCurrentAudioTrack(-1);
-    setAudioMenuOpen(false);
     setIsAudioTrackSwitching(false);
     privateProgressPausedRef.current = false;
     pendingPrivateAudioSwitchRef.current = false;
@@ -978,12 +976,10 @@ function PlayPageClient() {
     if (typeof track.hlsIndex === 'number') {
       const hls = artPlayerRef.current?.video?.hls;
       if (!hls) {
-        setAudioMenuOpen(false);
         return;
       }
 
       if (hls.audioTrack === track.hlsIndex) {
-        setAudioMenuOpen(false);
         return;
       }
 
@@ -993,19 +989,15 @@ function PlayPageClient() {
         savePreferredAudioLang(track.lang);
       } catch (error) {
         console.warn('切换 HLS 音轨失败:', error);
-      } finally {
-        setAudioMenuOpen(false);
       }
       return;
     }
 
     if (!isPrivateEmbyLikeSource) {
-      setAudioMenuOpen(false);
       return;
     }
 
     if (track.id === currentAudioTrackRef.current) {
-      setAudioMenuOpen(false);
       return;
     }
 
@@ -1016,18 +1008,17 @@ function PlayPageClient() {
 
     const nextUrl = appendAudioStreamIndex(videoUrl, track.id);
     if (!nextUrl || nextUrl === videoUrl) {
-      setAudioMenuOpen(false);
       return;
     }
 
     pendingPrivateAudioSwitchRef.current = true;
     privateProgressPausedRef.current = true;
     setIsAudioTrackSwitching(true);
-    setAudioMenuOpen(false);
     setVideoUrl(nextUrl);
   };
 
   const buildAudioTrackControl = () => {
+    const escapedCurrentTrackName = escapeAudioTrackHtml(currentAudioTrackName);
     const selector = audioTracks.map((track, index) => {
       const selected =
         typeof track.hlsIndex === 'number'
@@ -1054,14 +1045,14 @@ function PlayPageClient() {
         : `音轨: ${currentAudioTrackName}`,
       style: {
         display: audioTracks.length >= 2 ? 'flex' : 'none',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '0 6px',
       },
       html: isAudioTrackSwitching
-        ? '<i class="art-icon flex art-audio-track-trigger"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" stroke-opacity="0.35"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i>'
-        : '<i class="art-icon flex art-audio-track-trigger"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 9v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9 7v10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M17 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i>',
+        ? '<i class="art-icon flex art-audio-track-trigger"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" stroke-opacity="0.35"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i><span style="font-size:12px;line-height:1;">音轨</span>'
+        : `<i class="art-icon flex art-audio-track-trigger"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 9v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9 7v10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M17 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></i><span style="font-size:12px;line-height:1;">音轨</span><span style="max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;opacity:0.85;">${escapedCurrentTrackName}</span>`,
       selector,
-      click: function () {
-        setAudioMenuOpen((prev) => !prev);
-      },
       onSelect: function (selectorItem: any) {
         const selectedTrackId = Number(selectorItem.trackId);
         const selectedTrackHlsIndex = Number(selectorItem.trackHlsIndex);
@@ -1080,49 +1071,9 @@ function PlayPageClient() {
         if (selectedTrack) {
           void handleAudioTrackSelect(selectedTrack);
         }
-        setAudioMenuOpen(false);
       },
     };
   };
-
-  useEffect(() => {
-    if (!audioMenuOpen) {
-      return;
-    }
-
-    const closeMenu = (event: MouseEvent | TouchEvent) => {
-      const target = event.target as Element | null;
-      if (!target) {
-        return;
-      }
-
-      if (target.closest('.art-audio-track-trigger')) {
-        return;
-      }
-
-      if (target.closest('.art-selector-list')) {
-        return;
-      }
-
-      setAudioMenuOpen(false);
-    };
-
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setAudioMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', closeMenu);
-    document.addEventListener('touchstart', closeMenu);
-    document.addEventListener('keydown', closeOnEscape);
-
-    return () => {
-      document.removeEventListener('mousedown', closeMenu);
-      document.removeEventListener('touchstart', closeMenu);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [audioMenuOpen]);
 
   const loadDanmuToPlayer = (list: DanmuItem[]) => {
     if (!artPlayerRef.current) return;
