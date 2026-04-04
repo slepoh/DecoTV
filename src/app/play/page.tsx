@@ -2864,6 +2864,10 @@ function PlayPageClient() {
 
     // 非WebKit浏览器且播放器已存在，使用switch方法切换
     if (!isWebkit && artPlayerRef.current) {
+      // 在切换前从 localStorage 重新读取播放速率，确保使用最新保存的值
+      const savedPlaybackRate = loadPlaybackRate();
+      lastPlaybackRateRef.current = savedPlaybackRate;
+
       artPlayerRef.current.switch = videoUrl;
       artPlayerRef.current.title = `${videoTitle} - 第${
         currentEpisodeIndex + 1
@@ -2875,6 +2879,12 @@ function PlayPageClient() {
           videoUrl,
         );
       }
+      // 切换后立即恢复播放速率，防止被重置
+      setTimeout(() => {
+        if (artPlayerRef.current) {
+          artPlayerRef.current.playbackRate = savedPlaybackRate;
+        }
+      }, 0);
       return;
     }
 
