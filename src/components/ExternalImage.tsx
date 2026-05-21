@@ -12,7 +12,8 @@ import {
 import {
   type DoubanImageProxyOverride,
   POSTER_FALLBACK_SRC,
-  resolveImageUrl,
+  rememberDoubanImageProvider,
+  resolveImageUrlCandidates,
 } from '@/lib/image-url';
 
 type ExternalImageProps = Omit<ImageProps, 'src'> & {
@@ -21,15 +22,18 @@ type ExternalImageProps = Omit<ImageProps, 'src'> & {
   proxyWidth?: number;
 };
 
-function resolveSrc(
+function resolveSrcCandidates(
   src: ImageProps['src'],
   proxyWidth: number,
   doubanImageProxy?: DoubanImageProxyOverride,
-): ImageProps['src'] {
+): ImageProps['src'][] {
   if (typeof src !== 'string') {
-    return src;
+    return [src];
   }
-  return resolveImageUrl(src, { wsrvWidth: proxyWidth, doubanImageProxy });
+  return resolveImageUrlCandidates(src, {
+    wsrvWidth: proxyWidth,
+    doubanImageProxy,
+  });
 }
 
 let cachedClientDoubanImageProxy: DoubanImageProxyOverride | undefined;
@@ -61,11 +65,30 @@ function readClientDoubanImageProxy(): DoubanImageProxyOverride | undefined {
   return cachedClientDoubanImageProxy;
 }
 
+function areCandidatesEqual(
+  left: ImageProps['src'][],
+  right: ImageProps['src'][],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => Object.is(item, right[index]));
+}
+
+function withFallbackCandidate(
+  candidates: ImageProps['src'][],
+  fallbackSrc: string,
+): ImageProps['src'][] {
+  if (candidates.some((item) => Object.is(item, fallbackSrc))) {
+    return candidates;
+  }
+  return [...candidates, fallbackSrc];
+}
+
 export default function ExternalImage(props: ExternalImageProps) {
   const {
     src,
     decoding = 'async',
     loading,
+    onLoad: externalOnLoad,
     onError: externalOnError,
     fallbackSrc = POSTER_FALLBACK_SRC,
     proxyWidth = 256,
@@ -73,36 +96,67 @@ export default function ExternalImage(props: ExternalImageProps) {
   } = props;
 
   // SSR 与首屏渲染只走 process.env 默认值，确保两端 HTML 一致避免 hydration 警告。
-  const ssrSafeSrc = useMemo(
-    () => resolveSrc(src, proxyWidth),
-    [src, proxyWidth],
+  const ssrSafeCandidates = useMemo(
+    () =>
+      withFallbackCandidate(resolveSrcCandidates(src, proxyWidth), fallbackSrc),
+    [src, proxyWidth, fallbackSrc],
   );
-  const [currentSrc, setCurrentSrc] = useState<ImageProps['src']>(ssrSafeSrc);
-  const [fallbackApplied, setFallbackApplied] = useState(false);
+  const [candidates, setCandidates] =
+    useState<ImageProps['src'][]>(ssrSafeCandidates);
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  const currentSrc = candidates[candidateIndex] || fallbackSrc;
 
   // 客户端挂载后再叠加 RUNTIME_CONFIG / localStorage 中的用户/管理员选择。
   useEffect(() => {
-    const override = readClientDoubanImageProxy();
-    const nextSrc = resolveSrc(src, proxyWidth, override);
-    setCurrentSrc((previousSrc) =>
-      Object.is(previousSrc, nextSrc) ? previousSrc : nextSrc,
-    );
-    setFallbackApplied((wasFallbackApplied) =>
-      wasFallbackApplied ? false : wasFallbackApplied,
-    );
-  }, [src, proxyWidth]);
+    const refreshCandidates = () => {
+      cachedClientDoubanImageProxyAt = 0;
+      const override = readClientDoubanImageProxy();
+      const nextCandidates = withFallbackCandidate(
+        resolveSrcCandidates(src, proxyWidth, override),
+        fallbackSrc,
+      );
+      setCandidates((previousCandidates) =>
+        areCandidatesEqual(previousCandidates, nextCandidates)
+          ? previousCandidates
+          : nextCandidates,
+      );
+      setCandidateIndex(0);
+    };
+
+    refreshCandidates();
+    window.addEventListener('doubanProxyChanged', refreshCandidates);
+
+    return () => {
+      window.removeEventListener('doubanProxyChanged', refreshCandidates);
+    };
+  }, [src, proxyWidth, fallbackSrc]);
+
+  const handleLoad = useCallback(
+    (e: SyntheticEvent<HTMLImageElement, Event>) => {
+      if (typeof currentSrc === 'string') {
+        rememberDoubanImageProvider(currentSrc);
+      }
+      if (typeof externalOnLoad === 'function') {
+        externalOnLoad(e);
+      }
+    },
+    [currentSrc, externalOnLoad],
+  );
 
   const handleError = useCallback(
     (e: SyntheticEvent<HTMLImageElement, Event>) => {
-      if (!fallbackApplied) {
-        setCurrentSrc(fallbackSrc);
-        setFallbackApplied(true);
+      const nextIndex = candidateIndex + 1;
+
+      if (nextIndex < candidates.length) {
+        setCandidateIndex(nextIndex);
+        return;
       }
+
       if (typeof externalOnError === 'function') {
         externalOnError(e);
       }
     },
-    [externalOnError, fallbackApplied, fallbackSrc],
+    [candidateIndex, candidates.length, externalOnError],
   );
 
   return (
@@ -113,6 +167,7 @@ export default function ExternalImage(props: ExternalImageProps) {
       loading={loading ?? 'lazy'}
       referrerPolicy={rest.referrerPolicy ?? 'no-referrer'}
       unoptimized
+      onLoad={handleLoad}
       onError={handleError}
     />
   );

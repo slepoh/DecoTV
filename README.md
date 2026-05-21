@@ -290,6 +290,39 @@ volumes:
 | ⚠️ 多端同步 | 不支持，每个浏览器独立存储                                            |
 | ⬇️ 下载缓存 | 建议挂载 `/app/.cache/ffmpeg-downloads`，避免容器重建时丢失已转存文件 |
 
+### 🏡 免登录家庭模式
+
+默认仍为 `NEXT_PUBLIC_AUTH_MODE=password`，需要登录后使用。家庭局域网、NAS、电视盒子、OpenWrt、飞牛 OS 等完全可信内网场景，可以显式开启免登录：
+
+```bash
+docker run -d \
+  --name decotv \
+  -p 3000:3000 \
+  -e NEXT_PUBLIC_AUTH_MODE=public \
+  -v decotv-downloads:/app/.cache/ffmpeg-downloads \
+  ghcr.io/decohererk/decotv:latest
+```
+
+Docker Compose 示例：
+
+```yml
+services:
+  decotv:
+    image: ghcr.io/decohererk/decotv:latest
+    container_name: decotv
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      - NEXT_PUBLIC_AUTH_MODE=public
+    volumes:
+      - decotv-downloads:/app/.cache/ffmpeg-downloads
+volumes:
+  decotv-downloads:
+```
+
+> ⚠️ `NEXT_PUBLIC_AUTH_MODE=public` 仅建议局域网、NAS、家庭内网、VPN、自用环境开启，不建议公网暴露。`/admin` 和 `/api/admin/*` 默认仍需要登录保护；只有同时设置 `PUBLIC_ALLOW_ADMIN=true` 才会免登录开放后台和后台 API，该开关风险极高，仅适合完全可信内网。
+
 #### 常见问题
 
 **Q: 登录成功后操作仍提示 401 Unauthorized？**
@@ -365,13 +398,15 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 
 ### 基础配置
 
-| 变量                  | 说明       | 可选值                   | 默认值                                                                                                                     |
-| --------------------- | ---------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| USERNAME              | 管理员账号 | 任意字符串               | 无默认，数据库模式**必填**，本地模式可省略                                                                                 |
-| PASSWORD              | 管理员密码 | 任意字符串               | 无默认，**必填**                                                                                                           |
-| SITE_BASE             | 站点 URL   | 形如 https://example.com | 空                                                                                                                         |
-| NEXT_PUBLIC_SITE_NAME | 站点名称   | 任意字符串               | DecoTV                                                                                                                     |
-| ANNOUNCEMENT          | 站点公告   | 任意字符串               | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
+| 变量                  | 说明                      | 可选值                   | 默认值                                                                                                                     |
+| --------------------- | ------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| USERNAME              | 管理员账号                | 任意字符串               | 无默认，数据库模式**必填**，本地模式可省略                                                                                 |
+| PASSWORD              | 管理员密码                | 任意字符串               | 无默认，**必填**                                                                                                           |
+| NEXT_PUBLIC_AUTH_MODE | 访问模式                  | password、public         | password                                                                                                                   |
+| PUBLIC_ALLOW_ADMIN    | public 模式下是否开放后台 | true/false               | false                                                                                                                      |
+| SITE_BASE             | 站点 URL                  | 形如 https://example.com | 空                                                                                                                         |
+| NEXT_PUBLIC_SITE_NAME | 站点名称                  | 任意字符串               | DecoTV                                                                                                                     |
+| ANNOUNCEMENT          | 站点公告                  | 任意字符串               | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
 
 ### 存储配置
 
@@ -399,9 +434,9 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | 变量                                | 说明                     | 可选值     | 默认值 | 备注            |
 | ----------------------------------- | ------------------------ | ---------- | ------ | --------------- |
 | NEXT_PUBLIC_SEARCH_MAX_PAGE         | 搜索接口可拉取的最大页数 | 1-50       | 5      | 数值越大越慢    |
-| NEXT_PUBLIC_DOUBAN_PROXY_TYPE       | 豆瓣数据源请求方式       | 见下方说明 | direct | -               |
+| NEXT_PUBLIC_DOUBAN_PROXY_TYPE       | 豆瓣数据源请求方式       | 见下方说明 | auto   | -               |
 | NEXT_PUBLIC_DOUBAN_PROXY            | 自定义豆瓣数据代理 URL   | URL prefix | 空     | custom 模式使用 |
-| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE | 豆瓣图片代理类型         | 见下方说明 | direct | -               |
+| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE | 豆瓣图片代理类型         | 见下方说明 | auto   | -               |
 | NEXT_PUBLIC_DOUBAN_IMAGE_PROXY      | 自定义豆瓣图片代理 URL   | URL prefix | 空     | custom 模式使用 |
 | NEXT_PUBLIC_DISABLE_YELLOW_FILTER   | 关闭色情内容过滤         | true/false | false  | 不建议开启      |
 | NEXT_PUBLIC_FLUID_SEARCH            | 是否开启搜索接口流式输出 | true/false | true   | -               |
@@ -410,22 +445,29 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 
 | 值                    | 说明                                                                               |
 | --------------------- | ---------------------------------------------------------------------------------- |
-| direct                | 服务器直接请求豆瓣源站（默认）                                                     |
-| cors-proxy-zwei       | 浏览器通过 [Zwei](https://github.com/bestzwei) 提供的 CORS Proxy 请求豆瓣数据      |
-| cmliussss-cdn-tencent | 浏览器通过 [CMLiussss](https://github.com/cmliu) 提供的腾讯云 CDN 加速请求豆瓣数据 |
-| cmliussss-cdn-ali     | 浏览器通过 [CMLiussss](https://github.com/cmliu) 提供的阿里云 CDN 加速请求豆瓣数据 |
+| auto                  | 智能自动（默认），服务端按成功率和延迟在多个 provider 间自动降级                   |
+| direct                | 服务器直接请求豆瓣源站                                                             |
+| server                | 兼容值，等同于服务端智能代理                                                       |
+| cors-proxy-zwei       | 服务端通过 [Zwei](https://github.com/bestzwei) 提供的 CORS Proxy 请求豆瓣数据      |
+| cmliussss-cdn-tencent | 服务端通过 [CMLiussss](https://github.com/cmliu) 提供的腾讯云 CDN 加速请求豆瓣数据 |
+| cmliussss-cdn-ali     | 服务端通过 [CMLiussss](https://github.com/cmliu) 提供的阿里云 CDN 加速请求豆瓣数据 |
 | custom                | 使用自定义代理（需配置 NEXT_PUBLIC_DOUBAN_PROXY）                                  |
 
 #### NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE 可选值
 
 | 值                    | 说明                                                        |
 | --------------------- | ----------------------------------------------------------- |
-| direct                | 浏览器直接请求豆瓣图片域名（默认）                          |
+| auto                  | 智能自动（默认），按候选链路逐级重试                        |
+| direct                | 浏览器直接请求豆瓣图片域名                                  |
 | server                | 服务器代理请求豆瓣图片                                      |
 | img3                  | 使用豆瓣官方精品 CDN（阿里云）                              |
 | cmliussss-cdn-tencent | 使用 [CMLiussss](https://github.com/cmliu) 提供的腾讯云 CDN |
 | cmliussss-cdn-ali     | 使用 [CMLiussss](https://github.com/cmliu) 提供的阿里云 CDN |
 | custom                | 使用自定义代理（需配置 NEXT_PUBLIC_DOUBAN_IMAGE_PROXY）     |
+
+`auto` 模式下，豆瓣数据请求统一走服务端 `/api/douban/*`：优先使用最近成功且延迟较低的 provider，单个 provider 超时、403/429/5xx、返回 HTML 或非 JSON 时，会记录失败原因并短期负缓存，然后自动尝试下一个 provider。API 成功响应会带 `X-DecoTV-Douban-Provider` 与 `X-DecoTV-Douban-Duration`，失败响应会带 `providerAttempts` 便于排查。
+
+豆瓣封面图片在浏览器端按候选链路重试：用户选择的代理 → 上次 auto 成功节点 → `img3.doubanio.com` → CMLiussss 阿里云 CDN → CMLiussss 腾讯云 CDN → `/api/image-proxy` 服务器代理 → 豆瓣原图直连 → `poster-fallback.svg`。本地设置或后台配置变更后会触发 `doubanProxyChanged`，只清理豆瓣相关缓存。
 
 ### 弹幕功能配置
 

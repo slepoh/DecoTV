@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { getAuthInfoFromCookie, verifyApiAuth } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import type { SkipPreset } from '@/lib/types';
@@ -54,31 +54,43 @@ function normalizePreset(preset: unknown): SkipPreset | null {
 async function ensureAuthorized(
   request: NextRequest,
 ): Promise<{ username: string } | { error: NextResponse }> {
-  const authInfo = getAuthInfoFromCookie(request);
-  if (!authInfo || !authInfo.username) {
+  const authResult = verifyApiAuth(request);
+  if (!authResult.isValid) {
     return {
       error: NextResponse.json({ error: '未登录' }, { status: 401 }),
     };
   }
 
-  const config = await getConfig();
-  if (authInfo.username !== process.env.ADMIN_USERNAME) {
-    const user = config.UserConfig.Users.find(
-      (u) => u.username === authInfo.username,
-    );
-    if (!user) {
-      return {
-        error: NextResponse.json({ error: '用户不存在' }, { status: 401 }),
-      };
-    }
-    if (user.banned) {
-      return {
-        error: NextResponse.json({ error: '用户已被封禁' }, { status: 401 }),
-      };
+  const authInfo = getAuthInfoFromCookie(request);
+  const username =
+    authResult.username ||
+    authInfo?.username ||
+    (authResult.isLocalMode ? '__local__' : '');
+
+  if (!username) {
+    return {
+      error: NextResponse.json({ error: '未登录' }, { status: 401 }),
+    };
+  }
+
+  if (!authResult.isLocalMode && authResult.role !== 'guest') {
+    const config = await getConfig();
+    if (username !== process.env.ADMIN_USERNAME) {
+      const user = config.UserConfig.Users.find((u) => u.username === username);
+      if (!user) {
+        return {
+          error: NextResponse.json({ error: '用户不存在' }, { status: 401 }),
+        };
+      }
+      if (user.banned) {
+        return {
+          error: NextResponse.json({ error: '用户已被封禁' }, { status: 401 }),
+        };
+      }
     }
   }
 
-  return { username: authInfo.username };
+  return { username };
 }
 
 export async function GET(request: NextRequest) {

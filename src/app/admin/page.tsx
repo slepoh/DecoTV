@@ -5189,9 +5189,9 @@ const SiteConfigComponent = ({
     Announcement: '',
     SearchDownstreamMaxPage: 1,
     SiteInterfaceCacheTime: 7200,
-    DoubanProxyType: 'cmliussss-cdn-tencent',
+    DoubanProxyType: 'auto',
     DoubanProxy: '',
-    DoubanImageProxyType: 'cmliussss-cdn-tencent',
+    DoubanImageProxyType: 'auto',
     DoubanImageProxy: '',
     TmdbApiKey: '',
     TmdbProxyType: 'direct',
@@ -5211,10 +5211,14 @@ const SiteConfigComponent = ({
   const [isDoubanDropdownOpen, setIsDoubanDropdownOpen] = useState(false);
   const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] =
     useState(false);
+  const [doubanDataTestResult, setDoubanDataTestResult] = useState('');
+  const [doubanImageTestResult, setDoubanImageTestResult] = useState('');
 
   // 豆瓣数据源选项
   const doubanDataSourceOptions = [
+    { value: 'auto', label: '智能自动（推荐）' },
     { value: 'direct', label: '直连（服务器直接请求豆瓣）' },
+    { value: 'server', label: '服务器代理' },
     { value: 'cors-proxy-zwei', label: 'Cors Proxy By Zwei' },
     {
       value: 'cmliussss-cdn-tencent',
@@ -5226,6 +5230,7 @@ const SiteConfigComponent = ({
 
   // 豆瓣图片代理选项
   const doubanImageProxyTypeOptions = [
+    { value: 'auto', label: '智能自动（推荐）' },
     { value: 'direct', label: '直连（浏览器直接请求豆瓣）' },
     { value: 'server', label: '服务器代理（由服务器代理请求豆瓣）' },
     { value: 'img3', label: '豆瓣官方精品 CDN（阿里云）' },
@@ -5260,11 +5265,9 @@ const SiteConfigComponent = ({
     if (config?.SiteConfig) {
       setSiteSettings({
         ...config.SiteConfig,
-        DoubanProxyType:
-          config.SiteConfig.DoubanProxyType || 'cmliussss-cdn-tencent',
+        DoubanProxyType: config.SiteConfig.DoubanProxyType || 'auto',
         DoubanProxy: config.SiteConfig.DoubanProxy || '',
-        DoubanImageProxyType:
-          config.SiteConfig.DoubanImageProxyType || 'cmliussss-cdn-tencent',
+        DoubanImageProxyType: config.SiteConfig.DoubanImageProxyType || 'auto',
         DoubanImageProxy: config.SiteConfig.DoubanImageProxy || '',
         TmdbApiKey: config.TMDBConfig?.ApiKey || '',
         TmdbProxyType: config.SiteConfig.TmdbProxyType || 'direct',
@@ -5362,6 +5365,50 @@ const SiteConfigComponent = ({
     }));
   };
 
+  const handleTestDoubanProxy = async (target: 'data' | 'image') => {
+    const params = new URLSearchParams({
+      target,
+      proxyType:
+        target === 'data'
+          ? siteSettings.DoubanProxyType
+          : siteSettings.DoubanImageProxyType,
+      proxyUrl:
+        target === 'data'
+          ? siteSettings.DoubanProxy
+          : siteSettings.DoubanImageProxy,
+    });
+    const loadingKey = target === 'data' ? 'testDoubanData' : 'testDoubanImage';
+
+    await withLoading(loadingKey, async () => {
+      const resp = await fetch(`/api/douban/health?${params.toString()}`, {
+        cache: 'no-store',
+      });
+      const result = await resp.json().catch(() => ({}));
+      const attempts = Array.isArray(result.attempts) ? result.attempts : [];
+      const firstFailure = attempts.find((item: any) => !item.ok);
+      const message = result.ok
+        ? `成功：${result.provider}，${Math.round(result.durationMs || 0)}ms`
+        : `失败：${firstFailure?.reason || result.error || '未知错误'}`;
+
+      if (target === 'data') {
+        setDoubanDataTestResult(message);
+      } else {
+        setDoubanImageTestResult(message);
+      }
+
+      if (!resp.ok || !result.ok) {
+        throw new Error(message);
+      }
+
+      showSuccess(message, showAlert);
+    }).catch((err) => {
+      showError(
+        err instanceof Error ? err.message : '豆瓣代理检测失败',
+        showAlert,
+      );
+    });
+  };
+
   // 保存站点配置
   const handleSave = async () => {
     await withLoading('saveSiteConfig', async () => {
@@ -5378,6 +5425,7 @@ const SiteConfigComponent = ({
         }
 
         showSuccess('保存成功, 请刷新页面', showAlert);
+        window.dispatchEvent(new CustomEvent('doubanProxyChanged'));
         await refreshConfig();
       } catch (err) {
         showError(err instanceof Error ? err.message : '保存失败', showAlert);
@@ -5487,6 +5535,21 @@ const SiteConfigComponent = ({
           <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
             选择获取豆瓣数据的方式
           </p>
+          <div className='mt-2 flex items-center gap-2'>
+            <button
+              type='button'
+              onClick={() => handleTestDoubanProxy('data')}
+              disabled={isLoading('testDoubanData')}
+              className='inline-flex items-center px-3 py-1.5 rounded-lg text-xs bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60'
+            >
+              {isLoading('testDoubanData') ? '检测中...' : '检测数据代理'}
+            </button>
+            {doubanDataTestResult && (
+              <span className='text-xs text-gray-500 dark:text-gray-400'>
+                {doubanDataTestResult}
+              </span>
+            )}
+          </div>
 
           {/* 感谢信息 */}
           {getThanksInfo(siteSettings.DoubanProxyType) && (
@@ -5598,6 +5661,21 @@ const SiteConfigComponent = ({
           <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
             选择获取豆瓣图片的方式
           </p>
+          <div className='mt-2 flex items-center gap-2'>
+            <button
+              type='button'
+              onClick={() => handleTestDoubanProxy('image')}
+              disabled={isLoading('testDoubanImage')}
+              className='inline-flex items-center px-3 py-1.5 rounded-lg text-xs bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60'
+            >
+              {isLoading('testDoubanImage') ? '检测中...' : '检测图片代理'}
+            </button>
+            {doubanImageTestResult && (
+              <span className='text-xs text-gray-500 dark:text-gray-400'>
+                {doubanImageTestResult}
+              </span>
+            )}
+          </div>
 
           {/* 感谢信息 */}
           {getThanksInfo(siteSettings.DoubanImageProxyType) && (

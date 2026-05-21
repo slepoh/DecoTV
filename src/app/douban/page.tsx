@@ -443,8 +443,8 @@ function DoubanPageClient() {
     setLoading(true);
 
     try {
-      // 确保在加载初始数据时重置页面状态
-      setDoubanData([]);
+      // 保留旧数据直到新数据成功返回，避免代理瞬断导致页面直接空白。
+      setDoubanData((previous) => (previous.length > 0 ? previous : []));
       setCurrentPage(0);
       setHasMore(true);
       setIsLoadingMore(false);
@@ -564,6 +564,11 @@ function DoubanPageClient() {
       }
     } catch (err) {
       console.error(err);
+      window.dispatchEvent(
+        new CustomEvent('globalError', {
+          detail: { message: '豆瓣数据加载失败，已保留当前可用内容' },
+        }),
+      );
       setLoading(false); // 发生错误时总是停止loading状态
     } finally {
       // 【请求生命周期】清除待处理标记

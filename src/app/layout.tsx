@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import NextTopLoader from 'nextjs-toploader';
-import React from 'react';
+import React, { Suspense } from 'react';
 
 import './globals.css';
 
+import { getAuthMode, isPublicAdminAllowed } from '@/lib/auth-mode';
 import { getConfig } from '@/lib/config';
 
 import { BangumiSubscriptionProvider } from '@/contexts/BangumiSubscriptionContext';
@@ -53,11 +54,10 @@ export default async function RootLayout({
     process.env.ANNOUNCEMENT ||
     '本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。';
 
-  let doubanProxyType =
-    process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent';
+  let doubanProxyType = process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'auto';
   let doubanProxy = process.env.NEXT_PUBLIC_DOUBAN_PROXY || '';
   let doubanImageProxyType =
-    process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'cmliussss-cdn-tencent';
+    process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'auto';
   let doubanImageProxy = process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '';
   let disableYellowFilter =
     process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true';
@@ -111,6 +111,8 @@ export default async function RootLayout({
     FLUID_SEARCH: fluidSearch,
     SEARCH_RESULT_LOAD_MODE: searchResultLoadMode,
     PRIVATE_LIBRARY_ENABLED: privateLibraryEnabled,
+    AUTH_MODE: getAuthMode(),
+    PUBLIC_ALLOW_ADMIN: isPublicAdminAllowed(),
   };
 
   return (
@@ -155,7 +157,9 @@ export default async function RootLayout({
                 <SiteProvider siteName={siteName} announcement={announcement}>
                   <ParticleBackground />
                   <NavbarGate>
-                    <TopNavbar />
+                    <Suspense fallback={null}>
+                      <TopNavbar />
+                    </Suspense>
                   </NavbarGate>
                   {children}
                   <GlobalErrorIndicator />

@@ -120,7 +120,14 @@ class HybridCacheManager {
    */
   private getCurrentUsername(): string | null {
     const authInfo = getAuthInfoFromBrowserCookie();
-    return authInfo?.username || null;
+    if (authInfo?.username) return authInfo.username;
+    if (
+      typeof window !== 'undefined' &&
+      window.RUNTIME_CONFIG?.AUTH_MODE === 'public'
+    ) {
+      return '__public_guest__';
+    }
+    return null;
   }
 
   /**
@@ -470,6 +477,9 @@ async function fetchWithAuth(
   if (!res.ok) {
     // 如果是 401 未授权，跳转到登录页面
     if (res.status === 401) {
+      if (window.RUNTIME_CONFIG?.AUTH_MODE === 'public') {
+        throw new Error(`请求 ${url} 未授权`);
+      }
       // 调用 logout 接口
       try {
         await fetch('/api/logout', {
@@ -1328,12 +1338,15 @@ export function getCacheStatus(): {
   }
 
   const authInfo = getAuthInfoFromBrowserCookie();
+  const isPublicMode =
+    typeof window !== 'undefined' &&
+    window.RUNTIME_CONFIG?.AUTH_MODE === 'public';
   return {
     hasPlayRecords: !!cacheManager.getCachedPlayRecords(),
     hasFavorites: !!cacheManager.getCachedFavorites(),
     hasSearchHistory: !!cacheManager.getCachedSearchHistory(),
     hasSkipConfigs: !!cacheManager.getCachedSkipConfigs(),
-    username: authInfo?.username || null,
+    username: authInfo?.username || (isPublicMode ? '__public_guest__' : null),
   };
 }
 

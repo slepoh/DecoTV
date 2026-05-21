@@ -1,14 +1,16 @@
 export const POSTER_FALLBACK_SRC = '/poster-fallback.svg';
 
 const DEFAULT_WSRV_WIDTH = 256;
-const DEFAULT_DOUBAN_IMAGE_PROXY_TYPE = 'cmliussss-cdn-tencent';
+const DEFAULT_DOUBAN_IMAGE_PROXY_TYPE = 'auto';
 const TIER1_DIRECT_HOSTS = new Set(['lain.bgm.tv']);
 const WSRV_HOSTS = new Set(['wsrv.nl', 'images.weserv.nl']);
 const CMLIUSSSS_TENCENT_HOST = 'img.doubanio.cmliussss.net';
 const CMLIUSSSS_ALI_HOST = 'img.doubanio.cmliussss.com';
 const DOUBAN_IMG3_HOST = 'img3.doubanio.com';
+const AUTO_IMAGE_PROVIDER_STORAGE_KEY = 'doubanImageAutoProvider';
 
 export type DoubanImageProxyType =
+  | 'auto'
   | 'direct'
   | 'server'
   | 'img3'
@@ -87,19 +89,69 @@ function getDefaultDoubanImageProxy(): {
   };
 }
 
+function getStoredAutoImageProvider(): DoubanImageProxyType | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const stored = window.localStorage.getItem(AUTO_IMAGE_PROVIDER_STORAGE_KEY);
+    if (
+      stored === 'img3' ||
+      stored === 'cmliussss-cdn-ali' ||
+      stored === 'cmliussss-cdn-tencent' ||
+      stored === 'server' ||
+      stored === 'direct'
+    ) {
+      return stored;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+export function rememberDoubanImageProvider(src: string): void {
+  if (typeof window === 'undefined') return;
+
+  const parsedUrl = toAbsoluteUrl(src);
+  let provider: DoubanImageProxyType | null = null;
+
+  if (src.startsWith('/api/image-proxy')) {
+    provider = 'server';
+  } else if (parsedUrl?.hostname === DOUBAN_IMG3_HOST) {
+    provider = 'img3';
+  } else if (parsedUrl?.hostname === CMLIUSSSS_ALI_HOST) {
+    provider = 'cmliussss-cdn-ali';
+  } else if (parsedUrl?.hostname === CMLIUSSSS_TENCENT_HOST) {
+    provider = 'cmliussss-cdn-tencent';
+  } else if (parsedUrl && isDoubanImageHost(parsedUrl.hostname)) {
+    provider = 'direct';
+  }
+
+  if (!provider) return;
+
+  try {
+    window.localStorage.setItem(AUTO_IMAGE_PROVIDER_STORAGE_KEY, provider);
+  } catch {
+    // ignore
+  }
+}
+
 function applyDoubanImageProxy(
-  parsedUrl: URL,
+  inputUrl: URL,
   proxyType: string,
   proxyUrl: string,
 ): string {
+  const parsedUrl = new URL(inputUrl.toString());
   parsedUrl.protocol = 'https:';
 
   switch (proxyType as DoubanImageProxyType) {
-    case 'direct':
-      return parsedUrl.toString();
-
+    case 'auto':
     case 'img3':
       parsedUrl.hostname = DOUBAN_IMG3_HOST;
+      return parsedUrl.toString();
+
+    case 'direct':
       return parsedUrl.toString();
 
     case 'cmliussss-cdn-tencent':
@@ -116,12 +168,12 @@ function applyDoubanImageProxy(
     case 'custom': {
       const trimmed = proxyUrl?.trim() ?? '';
       if (!trimmed) {
-        // 没填自定义 URL 就当 direct，避免拼出无效请求
         return parsedUrl.toString();
       }
       const target = parsedUrl.toString();
-      // 与 douban.client.ts 的数据代理保持一致：cors-anywhere 走 raw 拼接，
-      // 其他自定义代理统一前缀 + 编码后的 URL（匹配 UI placeholder 的语义）。
+      if (trimmed.includes('{url}')) {
+        return trimmed.replace('{url}', encodeURIComponent(target));
+      }
       if (trimmed === 'https://cors-anywhere.com/') {
         return `${trimmed}${target}`;
       }
@@ -129,18 +181,58 @@ function applyDoubanImageProxy(
     }
 
     default:
-      parsedUrl.hostname = CMLIUSSSS_TENCENT_HOST;
+      parsedUrl.hostname = DOUBAN_IMG3_HOST;
       return parsedUrl.toString();
   }
 }
 
-export function resolveImageUrl(
+function uniqueUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  return urls.filter((url) => {
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
+function buildDoubanImageCandidates(
+  parsedUrl: URL,
+  proxyType: string,
+  proxyUrl: string,
+): string[] {
+  const candidates: string[] = [];
+
+  // 图片代理 fallback：用户指定节点先试，随后按 auto 的稳定优先级逐级降级。
+  if (proxyType && proxyType !== 'auto') {
+    candidates.push(applyDoubanImageProxy(parsedUrl, proxyType, proxyUrl));
+  }
+
+  const storedAutoProvider = getStoredAutoImageProvider();
+  if (storedAutoProvider && storedAutoProvider !== proxyType) {
+    candidates.push(
+      applyDoubanImageProxy(parsedUrl, storedAutoProvider, proxyUrl),
+    );
+  }
+
+  candidates.push(
+    applyDoubanImageProxy(parsedUrl, 'img3', proxyUrl),
+    applyDoubanImageProxy(parsedUrl, 'cmliussss-cdn-ali', proxyUrl),
+    applyDoubanImageProxy(parsedUrl, 'cmliussss-cdn-tencent', proxyUrl),
+    applyDoubanImageProxy(parsedUrl, 'server', proxyUrl),
+    applyDoubanImageProxy(parsedUrl, 'direct', proxyUrl),
+    POSTER_FALLBACK_SRC,
+  );
+
+  return uniqueUrls(candidates);
+}
+
+export function resolveImageUrlCandidates(
   originalUrl: string,
   options: ResolveImageUrlOptions = {},
-): string {
+): string[] {
   const trimmed = originalUrl?.trim?.() ?? '';
   if (!trimmed) {
-    return POSTER_FALLBACK_SRC;
+    return [POSTER_FALLBACK_SRC];
   }
 
   if (
@@ -148,25 +240,27 @@ export function resolveImageUrl(
     trimmed.startsWith('data:') ||
     trimmed.startsWith('blob:')
   ) {
-    return trimmed;
+    return trimmed === POSTER_FALLBACK_SRC
+      ? [trimmed]
+      : [trimmed, POSTER_FALLBACK_SRC];
   }
 
   const parsedUrl = toAbsoluteUrl(trimmed);
   if (!parsedUrl) {
-    return trimmed;
+    return [trimmed, POSTER_FALLBACK_SRC];
   }
 
   const hostname = parsedUrl.hostname.toLowerCase();
 
   if (WSRV_HOSTS.has(hostname)) {
-    return parsedUrl.toString();
+    return [parsedUrl.toString(), POSTER_FALLBACK_SRC];
   }
 
   if (TIER1_DIRECT_HOSTS.has(hostname)) {
     if (parsedUrl.protocol === 'http:') {
       parsedUrl.protocol = 'https:';
     }
-    return parsedUrl.toString();
+    return [parsedUrl.toString(), POSTER_FALLBACK_SRC];
   }
 
   if (isDoubanImageHost(hostname)) {
@@ -175,19 +269,32 @@ export function resolveImageUrl(
       options.doubanImageProxy?.proxyType?.trim() || defaults.proxyType;
     const proxyUrl =
       options.doubanImageProxy?.proxyUrl ?? defaults.proxyUrl ?? '';
-    return applyDoubanImageProxy(parsedUrl, proxyType, proxyUrl);
+    return buildDoubanImageCandidates(parsedUrl, proxyType, proxyUrl);
   }
 
   if (isDoubanHost(hostname)) {
     if (parsedUrl.protocol === 'http:') {
       parsedUrl.protocol = 'https:';
     }
-    return parsedUrl.toString();
+    return [parsedUrl.toString(), POSTER_FALLBACK_SRC];
   }
 
   if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    return trimmed;
+    return [trimmed, POSTER_FALLBACK_SRC];
   }
 
-  return toWsrvUrl(parsedUrl.toString(), normalizeWsrvWidth(options.wsrvWidth));
+  return [
+    toWsrvUrl(parsedUrl.toString(), normalizeWsrvWidth(options.wsrvWidth)),
+    parsedUrl.toString(),
+    POSTER_FALLBACK_SRC,
+  ];
+}
+
+export function resolveImageUrl(
+  originalUrl: string,
+  options: ResolveImageUrlOptions = {},
+): string {
+  return (
+    resolveImageUrlCandidates(originalUrl, options)[0] || POSTER_FALLBACK_SRC
+  );
 }

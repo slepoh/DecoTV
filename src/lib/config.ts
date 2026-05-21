@@ -287,12 +287,10 @@ async function getInitConfig(
       SearchDownstreamMaxPage:
         Number(process.env.NEXT_PUBLIC_SEARCH_MAX_PAGE) || 5,
       SiteInterfaceCacheTime: cfgFile.cache_time || 7200,
-      DoubanProxyType:
-        process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent',
+      DoubanProxyType: process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'auto',
       DoubanProxy: process.env.NEXT_PUBLIC_DOUBAN_PROXY || '',
       DoubanImageProxyType:
-        process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE ||
-        'cmliussss-cdn-tencent',
+        process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'auto',
       DoubanImageProxy: process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '',
       TmdbProxyType: process.env.TMDB_REVERSE_PROXY
         ? 'reverse'
@@ -413,12 +411,10 @@ export function getLocalModeConfig(): AdminConfig {
       SearchDownstreamMaxPage:
         Number(process.env.NEXT_PUBLIC_SEARCH_MAX_PAGE) || 5,
       SiteInterfaceCacheTime: 7200,
-      DoubanProxyType:
-        process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent',
+      DoubanProxyType: process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'auto',
       DoubanProxy: process.env.NEXT_PUBLIC_DOUBAN_PROXY || '',
       DoubanImageProxyType:
-        process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE ||
-        'cmliussss-cdn-tencent',
+        process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'auto',
       DoubanImageProxy: process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '',
       TmdbProxyType: process.env.TMDB_REVERSE_PROXY
         ? 'reverse'
@@ -491,6 +487,26 @@ export async function getConfig(): Promise<AdminConfig> {
 export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   if (!adminConfig.SiteConfig) {
     adminConfig.SiteConfig = getLocalModeConfig().SiteConfig;
+  }
+
+  if (typeof adminConfig.SiteConfig.DoubanProxyType !== 'string') {
+    adminConfig.SiteConfig.DoubanProxyType =
+      process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'auto';
+  }
+
+  if (typeof adminConfig.SiteConfig.DoubanProxy !== 'string') {
+    adminConfig.SiteConfig.DoubanProxy =
+      process.env.NEXT_PUBLIC_DOUBAN_PROXY || '';
+  }
+
+  if (typeof adminConfig.SiteConfig.DoubanImageProxyType !== 'string') {
+    adminConfig.SiteConfig.DoubanImageProxyType =
+      process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'auto';
+  }
+
+  if (typeof adminConfig.SiteConfig.DoubanImageProxy !== 'string') {
+    adminConfig.SiteConfig.DoubanImageProxy =
+      process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '';
   }
 
   if (!adminConfig.SiteConfig.TmdbProxyType) {

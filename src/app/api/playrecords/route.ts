@@ -33,7 +33,9 @@ async function resolveAuthorizedUsername(
 
   const authInfo = getAuthInfoFromCookie(request);
   const username =
-    authInfo?.username || (authResult.isLocalMode ? '__local__' : '');
+    authResult.username ||
+    authInfo?.username ||
+    (authResult.isLocalMode ? '__local__' : '');
 
   if (!username) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

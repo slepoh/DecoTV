@@ -30,7 +30,7 @@ import { VersionPanel } from './VersionPanel';
 
 interface AuthInfo {
   username?: string;
-  role?: 'owner' | 'admin' | 'user';
+  role?: 'owner' | 'admin' | 'user' | 'guest';
 }
 
 export const UserMenu: React.FC = () => {
@@ -43,6 +43,8 @@ export const UserMenu: React.FC = () => {
   const [isVersionPanelOpen, setIsVersionPanelOpen] = useState(false);
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
   const [storageType, setStorageType] = useState<string>('localstorage');
+  const [authMode, setAuthMode] = useState<'password' | 'public'>('password');
+  const [publicAllowAdmin, setPublicAllowAdmin] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   // Body 滚动锁定 - 使用 overflow 方式避免布局问题
@@ -86,6 +88,11 @@ export const UserMenu: React.FC = () => {
   const [isDoubanDropdownOpen, setIsDoubanDropdownOpen] = useState(false);
   const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] =
     useState(false);
+  const [doubanDataTestResult, setDoubanDataTestResult] = useState('');
+  const [doubanImageTestResult, setDoubanImageTestResult] = useState('');
+  const [testingDoubanTarget, setTestingDoubanTarget] = useState<
+    'data' | 'image' | null
+  >(null);
 
   // 播放缓冲模式选项
   const bufferModeOptions = [
@@ -114,7 +121,9 @@ export const UserMenu: React.FC = () => {
 
   // 豆瓣数据源选项
   const doubanDataSourceOptions = [
+    { value: 'auto', label: '智能自动（推荐）' },
     { value: 'direct', label: '直连（服务器直接请求豆瓣）' },
+    { value: 'server', label: '服务器代理' },
     { value: 'cors-proxy-zwei', label: 'Cors Proxy By Zwei' },
     {
       value: 'cmliussss-cdn-tencent',
@@ -126,6 +135,7 @@ export const UserMenu: React.FC = () => {
 
   // 豆瓣图片代理选项
   const doubanImageProxyTypeOptions = [
+    { value: 'auto', label: '智能自动（推荐）' },
     { value: 'direct', label: '直连（浏览器直接请求豆瓣）' },
     { value: 'server', label: '服务器代理（由服务器代理请求豆瓣）' },
     { value: 'img3', label: '豆瓣官方精品 CDN（阿里云）' },
@@ -165,6 +175,14 @@ export const UserMenu: React.FC = () => {
       const type =
         (window as any).RUNTIME_CONFIG?.STORAGE_TYPE || 'localstorage';
       setStorageType(type);
+      setAuthMode(
+        (window as any).RUNTIME_CONFIG?.AUTH_MODE === 'public'
+          ? 'public'
+          : 'password',
+      );
+      setPublicAllowAdmin(
+        (window as any).RUNTIME_CONFIG?.PUBLIC_ALLOW_ADMIN === true,
+      );
     }
   }, []);
 
@@ -180,8 +198,7 @@ export const UserMenu: React.FC = () => {
 
       const savedDoubanDataSource = localStorage.getItem('doubanDataSource');
       const defaultDoubanProxyType =
-        (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE ||
-        'cmliussss-cdn-tencent';
+        (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE || 'auto';
       if (savedDoubanDataSource !== null) {
         setDoubanDataSource(savedDoubanDataSource);
       } else if (defaultDoubanProxyType) {
@@ -201,8 +218,7 @@ export const UserMenu: React.FC = () => {
         'doubanImageProxyType',
       );
       const defaultDoubanImageProxyType =
-        (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE ||
-        'cmliussss-cdn-tencent';
+        (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE || 'auto';
       if (savedDoubanImageProxyType !== null) {
         setDoubanImageProxyType(savedDoubanImageProxyType);
       } else if (defaultDoubanImageProxyType) {
@@ -417,6 +433,7 @@ export const UserMenu: React.FC = () => {
     setDoubanProxyUrl(value);
     if (typeof window !== 'undefined') {
       localStorage.setItem('doubanProxyUrl', value);
+      window.dispatchEvent(new CustomEvent('doubanProxyChanged'));
     }
   };
 
@@ -452,6 +469,7 @@ export const UserMenu: React.FC = () => {
     setDoubanDataSource(value);
     if (typeof window !== 'undefined') {
       localStorage.setItem('doubanDataSource', value);
+      window.dispatchEvent(new CustomEvent('doubanProxyChanged'));
     }
   };
 
@@ -459,6 +477,7 @@ export const UserMenu: React.FC = () => {
     setDoubanImageProxyType(value);
     if (typeof window !== 'undefined') {
       localStorage.setItem('doubanImageProxyType', value);
+      window.dispatchEvent(new CustomEvent('doubanProxyChanged'));
     }
   };
 
@@ -466,6 +485,43 @@ export const UserMenu: React.FC = () => {
     setDoubanImageProxyUrl(value);
     if (typeof window !== 'undefined') {
       localStorage.setItem('doubanImageProxyUrl', value);
+      window.dispatchEvent(new CustomEvent('doubanProxyChanged'));
+    }
+  };
+
+  const handleTestDoubanProxy = async (target: 'data' | 'image') => {
+    const params = new URLSearchParams({
+      target,
+      proxyType: target === 'data' ? doubanDataSource : doubanImageProxyType,
+      proxyUrl: target === 'data' ? doubanProxyUrl : doubanImageProxyUrl,
+    });
+
+    setTestingDoubanTarget(target);
+    try {
+      const response = await fetch(`/api/douban/health?${params.toString()}`, {
+        cache: 'no-store',
+      });
+      const result = await response.json().catch(() => ({}));
+      const attempts = Array.isArray(result.attempts) ? result.attempts : [];
+      const firstFailure = attempts.find((item: any) => !item.ok);
+      const message = result.ok
+        ? `成功：${result.provider}，${Math.round(result.durationMs || 0)}ms`
+        : `失败：${firstFailure?.reason || result.error || '未知错误'}`;
+
+      if (target === 'data') {
+        setDoubanDataTestResult(message);
+      } else {
+        setDoubanImageTestResult(message);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '检测失败';
+      if (target === 'data') {
+        setDoubanDataTestResult(message);
+      } else {
+        setDoubanImageTestResult(message);
+      }
+    } finally {
+      setTestingDoubanTarget(null);
     }
   };
 
@@ -522,16 +578,21 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('doubanImageProxyType', defaultDoubanImageProxyType);
       localStorage.setItem('doubanImageProxyUrl', defaultDoubanImageProxyUrl);
       localStorage.setItem('playerBufferMode', 'standard');
+      window.dispatchEvent(new CustomEvent('doubanProxyChanged'));
     }
   };
 
   // 检查是否显示管理面板按钮
   const showAdminPanel =
-    authInfo?.role === 'owner' || authInfo?.role === 'admin';
+    authMode === 'public'
+      ? publicAllowAdmin
+      : authInfo?.role === 'owner' || authInfo?.role === 'admin';
 
   // 检查是否显示修改密码按钮
   const showChangePassword =
-    authInfo?.role !== 'owner' && storageType !== 'localstorage';
+    authMode !== 'public' &&
+    authInfo?.role !== 'owner' &&
+    storageType !== 'localstorage';
 
   // 角色中文映射
   const getRoleText = (role?: string) => {
@@ -542,10 +603,17 @@ export const UserMenu: React.FC = () => {
         return '管理员';
       case 'user':
         return '用户';
+      case 'guest':
+        return '访客';
       default:
         return '';
     }
   };
+
+  const displayRole =
+    authMode === 'public' ? 'guest' : authInfo?.role || 'user';
+  const displayName =
+    authMode === 'public' ? '访客' : authInfo?.username || 'default';
 
   // 菜单面板内容
   const menuPanel = (
@@ -567,19 +635,19 @@ export const UserMenu: React.FC = () => {
               </span>
               <span
                 className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                  (authInfo?.role || 'user') === 'owner'
+                  displayRole === 'owner'
                     ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
-                    : (authInfo?.role || 'user') === 'admin'
+                    : displayRole === 'admin'
                       ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
                       : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
                 }`}
               >
-                {getRoleText(authInfo?.role || 'user')}
+                {getRoleText(displayRole)}
               </span>
             </div>
             <div className='flex items-center justify-between'>
               <div className='font-semibold text-slate-900 dark:text-gray-100 text-sm truncate'>
-                {authInfo?.username || 'default'}
+                {displayName}
               </div>
               <div className='text-[10px] text-slate-500 dark:text-gray-500'>
                 数据存储：
@@ -638,17 +706,21 @@ export const UserMenu: React.FC = () => {
             </button>
           )}
 
-          {/* 分割线 */}
-          <div className='my-1 border-t border-slate-200 dark:border-gray-700'></div>
+          {authMode !== 'public' && (
+            <>
+              {/* 分割线 */}
+              <div className='my-1 border-t border-slate-200 dark:border-gray-700'></div>
 
-          {/* 登出按钮 */}
-          <button
-            onClick={handleLogout}
-            className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm'
-          >
-            <LogOut className='w-4 h-4' />
-            <span className='font-medium'>登出</span>
-          </button>
+              {/* 登出按钮 */}
+              <button
+                onClick={handleLogout}
+                className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm'
+              >
+                <LogOut className='w-4 h-4' />
+                <span className='font-medium'>登出</span>
+              </button>
+            </>
+          )}
 
           {/* 分割线 */}
           <div className='my-1 border-t border-slate-200 dark:border-gray-700'></div>
@@ -748,6 +820,23 @@ export const UserMenu: React.FC = () => {
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
                   选择获取豆瓣数据的方式
                 </p>
+              </div>
+              <div className='flex items-center gap-2'>
+                <button
+                  type='button'
+                  onClick={() => handleTestDoubanProxy('data')}
+                  disabled={testingDoubanTarget === 'data'}
+                  className='px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60'
+                >
+                  {testingDoubanTarget === 'data'
+                    ? '检测中...'
+                    : '检测数据代理'}
+                </button>
+                {doubanDataTestResult && (
+                  <span className='text-xs text-gray-500 dark:text-gray-400'>
+                    {doubanDataTestResult}
+                  </span>
+                )}
               </div>
               <div className='relative' data-dropdown='douban-datasource'>
                 {/* 自定义下拉选择框 */}
@@ -854,6 +943,23 @@ export const UserMenu: React.FC = () => {
                 <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
                   选择获取豆瓣图片的方式
                 </p>
+              </div>
+              <div className='flex items-center gap-2'>
+                <button
+                  type='button'
+                  onClick={() => handleTestDoubanProxy('image')}
+                  disabled={testingDoubanTarget === 'image'}
+                  className='px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60'
+                >
+                  {testingDoubanTarget === 'image'
+                    ? '检测中...'
+                    : '检测图片代理'}
+                </button>
+                {doubanImageTestResult && (
+                  <span className='text-xs text-gray-500 dark:text-gray-400'>
+                    {doubanImageTestResult}
+                  </span>
+                )}
               </div>
               <div className='relative' data-dropdown='douban-image-proxy'>
                 {/* 自定义下拉选择框 */}
