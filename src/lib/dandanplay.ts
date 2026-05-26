@@ -4,7 +4,7 @@ export const DANDANPLAY_API_BASE = 'https://api.dandanplay.net';
 export const DEFAULT_DANDANPLAY_RELAY_ORIGIN = 'https://tv.katelya.eu.org';
 export const DANDANPLAY_RELAY_REQUEST_HEADER = 'x-decotv-dandanplay-relay';
 export const DANDANPLAY_NOT_CONFIGURED_MESSAGE =
-  '弹弹play官方弹幕暂不可用：当前实例未配置有效的服务端凭证，且托管中继不可用。';
+  '弹弹play官方弹幕暂不可用：当前实例未配置有效的服务端凭证，且未启用或无法连接托管中继。Docker 可改用自定义弹幕节点或配置自有凭证。';
 
 export interface DandanplayCredentials {
   appId: string;
@@ -19,12 +19,18 @@ export function getDandanplayCredentials(): DandanplayCredentials {
 }
 
 /**
- * Public deployments use the maintainer-operated DecoTV instance as a relay.
- * Only the relay deployment stores dandanplay credentials.
+ * Non-Docker web deployments use the maintainer-operated DecoTV instance as a
+ * relay. The published Docker image sets DOCKER_ENV=true and does not use it
+ * implicitly, because public image usage should not consume the maintainer's
+ * Vercel Hobby quota.
  */
 export function getDandanplayRelayOrigin(): string | null {
   const configured = (process.env.DANDANPLAY_RELAY_URL || '').trim();
   if (/^(disabled|false|off|none)$/i.test(configured)) {
+    return null;
+  }
+
+  if (!configured && process.env.DOCKER_ENV === 'true') {
     return null;
   }
 

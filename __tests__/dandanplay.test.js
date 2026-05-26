@@ -13,6 +13,7 @@ describe('dandanplay server integration helpers', () => {
   const originalRelayUrl = process.env.DANDANPLAY_RELAY_URL;
   const originalPublicRelayEnabled =
     process.env.DANDANPLAY_PUBLIC_RELAY_ENABLED;
+  const originalDockerEnv = process.env.DOCKER_ENV;
 
   afterEach(() => {
     if (originalRelayUrl === undefined) {
@@ -24,6 +25,11 @@ describe('dandanplay server integration helpers', () => {
       delete process.env.DANDANPLAY_PUBLIC_RELAY_ENABLED;
     } else {
       process.env.DANDANPLAY_PUBLIC_RELAY_ENABLED = originalPublicRelayEnabled;
+    }
+    if (originalDockerEnv === undefined) {
+      delete process.env.DOCKER_ENV;
+    } else {
+      process.env.DOCKER_ENV = originalDockerEnv;
     }
   });
 
@@ -68,8 +74,9 @@ describe('dandanplay server integration helpers', () => {
     expect(url.searchParams.has('anime')).toBe(false);
   });
 
-  it('uses the maintainer DecoTV deployment as the default public relay', () => {
+  it('uses the maintainer DecoTV deployment as the default Vercel relay', () => {
     delete process.env.DANDANPLAY_RELAY_URL;
+    delete process.env.DOCKER_ENV;
 
     const relayUrl = new URL(
       buildDandanplayRelayRequestUrl({
@@ -85,6 +92,7 @@ describe('dandanplay server integration helpers', () => {
 
   it('does not relay back into the managed origin or when explicitly disabled', () => {
     delete process.env.DANDANPLAY_RELAY_URL;
+    delete process.env.DOCKER_ENV;
     expect(
       buildDandanplayRelayRequestUrl({
         url: 'https://tv.katelya.eu.org/api/danmu-external?title=test',
@@ -97,6 +105,24 @@ describe('dandanplay server integration helpers', () => {
         url: 'https://forked-decotv.example/api/danmu-external?title=test',
       }),
     ).toBeNull();
+  });
+
+  it('does not route the published Docker image through Vercel by default', () => {
+    delete process.env.DANDANPLAY_RELAY_URL;
+    process.env.DOCKER_ENV = 'true';
+
+    expect(
+      buildDandanplayRelayRequestUrl({
+        url: 'http://localhost:3000/api/danmu-external?title=test',
+      }),
+    ).toBeNull();
+
+    process.env.DANDANPLAY_RELAY_URL = 'https://relay.example.com';
+    expect(
+      buildDandanplayRelayRequestUrl({
+        url: 'http://localhost:3000/api/danmu-external?title=test',
+      }),
+    ).toBe('https://relay.example.com/api/danmu-external?title=test');
   });
 
   it('allows the managed deployment to stop serving public relay traffic', () => {

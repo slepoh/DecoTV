@@ -1142,7 +1142,8 @@ async function fetchFromManagedRelay(
 //   - 仅服务端使用 DANDANPLAY_APP_ID 和 DANDANPLAY_APP_SECRET
 //
 // 第三优先级：维护者托管中继
-//   - 公开 Docker / Vercel 部署无需持有凭证，转发至维护者控制的 DecoTV 实例
+//   - Vercel Fork 无需持有凭证，默认转发至维护者控制的 DecoTV 实例
+//   - Docker / VPS 仅在显式配置 DANDANPLAY_RELAY_URL 时使用中继
 //   - 中继请求会绕过该实例的自定义节点配置，直接使用其服务端凭证
 // ============================================================================
 
