@@ -1,24 +1,19 @@
 /* eslint-disable no-console */
-import { createHash } from 'crypto';
 import { NextResponse } from 'next/server';
 
 import { getCacheTime, getConfig } from '@/lib/config';
+import {
+  buildDandanplayEpisodeSearchUrl,
+  buildDandanplayHeaders,
+  DANDANPLAY_API_BASE,
+  getDandanplayCredentials,
+} from '@/lib/dandanplay';
 
 export const runtime = 'nodejs';
 
 // ============================================================================
 // 弹弹play API 配置
 // ============================================================================
-
-const DANDANPLAY_API_BASE = 'https://api.dandanplay.net';
-
-/** 获取弹弹play API凭证（由开发者在构建时通过 GitHub Actions Secrets 内置） */
-function getDandanplayCredentials() {
-  return {
-    appId: process.env.DANDANPLAY_APP_ID || '',
-    appSecret: process.env.DANDANPLAY_APP_SECRET || '',
-  };
-}
 
 // ============================================================================
 // Types
@@ -164,51 +159,6 @@ function parsePositiveInt(value: string | null): number | null {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return parsed;
-}
-
-// ============================================================================
-// 弹弹play API 签名生成
-// ============================================================================
-
-/**
- * 生成弹弹play API签名
- * 算法: base64(sha256(AppId + Timestamp + Path + AppSecret))
- */
-function generateDandanplaySignature(
-  appId: string,
-  appSecret: string,
-  path: string,
-  timestamp: number,
-): string {
-  const data = appId + timestamp + path + appSecret;
-  return createHash('sha256').update(data).digest('base64');
-}
-
-/** 构建带签名的请求头 */
-function buildDandanplayHeaders(
-  appId: string,
-  appSecret: string,
-  path: string,
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-    'User-Agent': 'DecoTV/1.0',
-  };
-
-  if (appId && appSecret) {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signature = generateDandanplaySignature(
-      appId,
-      appSecret,
-      path,
-      timestamp,
-    );
-    headers['X-AppId'] = appId;
-    headers['X-Timestamp'] = String(timestamp);
-    headers['X-Signature'] = signature;
-  }
-
-  return headers;
 }
 
 // ============================================================================
@@ -466,15 +416,22 @@ function deduplicateDanmu(danmus: DanmuItem[]): DanmuItem[] {
 // 弹弹play API 调用（带超时和细粒度错误处理）
 // ============================================================================
 
-/** 搜索动画（按标题） */
-async function searchByTitle(
+/** 搜索动画：优先使用官方支持的 TMDB 精确反查，标题作为回退。 */
+async function searchEpisodes(
   appId: string,
   appSecret: string,
-  title: string,
+  options: {
+    anime?: string;
+    tmdbId?: number;
+    episode: number;
+  },
 ): Promise<DandanplaySearchResult | null> {
   const path = '/api/v2/search/episodes';
-  const url = `${DANDANPLAY_API_BASE}${path}?anime=${encodeURIComponent(title)}&episode=`;
+  const url = buildDandanplayEpisodeSearchUrl(options);
   const headers = buildDandanplayHeaders(appId, appSecret, path);
+  const queryLabel = options.tmdbId
+    ? `tmdbId:${options.tmdbId}`
+    : `"${options.anime || ''}"`;
 
   try {
     const response = await fetch(url, {
@@ -485,7 +442,7 @@ async function searchByTitle(
     if (!response.ok) {
       const errMsg = response.headers.get('X-Error-Message') || '';
       console.log(
-        `[danmu] Search failed for "${title}":`,
+        `[danmu] Search failed for ${queryLabel}:`,
         response.status,
         errMsg,
       );
@@ -495,7 +452,7 @@ async function searchByTitle(
     const data = await response.json();
     if (data.success === false) {
       console.log(
-        `[danmu] Search API error for "${title}":`,
+        `[danmu] Search API error for ${queryLabel}:`,
         data.errorMessage,
       );
       return null;
@@ -503,7 +460,7 @@ async function searchByTitle(
 
     return data;
   } catch (err) {
-    console.error(`[danmu] Search error for "${title}":`, err);
+    console.error(`[danmu] Search error for ${queryLabel}:`, err);
     return null;
   }
 }
@@ -558,9 +515,10 @@ async function resolveEpisode(
   title: string,
   episode: number,
   year?: string,
+  tmdbId?: number,
 ): Promise<MatchedEpisode | null> {
   // --- Level 0: 缓存查询 ---
-  const cacheKey = `${title.toLowerCase().trim()}:${episode}:${year || ''}`;
+  const cacheKey = `${tmdbId || ''}:${title.toLowerCase().trim()}:${episode}:${year || ''}`;
   const cached = getCacheValid(episodeIdCache, cacheKey);
   if (cached) {
     console.log(
@@ -569,11 +527,33 @@ async function resolveEpisode(
     return cached;
   }
 
-  // --- Level 1: 原始标题搜索 ---
+  // --- Level 1: TMDB ID 精确反查（开放平台自 2025-01-26 支持） ---
+  if (tmdbId) {
+    const searchData = await searchEpisodes(appId, appSecret, {
+      tmdbId,
+      episode,
+    });
+    if (searchData?.animes?.length) {
+      const match = findBestMatch(searchData.animes, title, episode, year);
+      if (match?.episodeId) {
+        match.matchLevel = `tmdb-id ${match.matchLevel}`;
+        setCache(episodeIdCache, cacheKey, match, EPISODE_ID_TTL);
+        console.log(
+          `[danmu] Matched by TMDB ${tmdbId}: "${title}" ep${episode} -> ${match.animeTitle} [${match.episodeTitle}]`,
+        );
+        return match;
+      }
+    }
+  }
+
+  // --- Level 2: 标题变体搜索 ---
   const titleVariants = generateTitleVariants(title);
 
   for (const variant of titleVariants) {
-    const searchData = await searchByTitle(appId, appSecret, variant);
+    const searchData = await searchEpisodes(appId, appSecret, {
+      anime: variant,
+      episode,
+    });
     if (!searchData || !searchData.animes || searchData.animes.length === 0) {
       continue;
     }
@@ -617,6 +597,7 @@ async function fetchDanmu(
   title: string,
   episode: number,
   year?: string,
+  tmdbId?: number,
   forceRefresh: boolean = false,
 ): Promise<DanmuResult> {
   const emptyResult: DanmuResult = { danmus: [], matchInfo: null };
@@ -634,6 +615,7 @@ async function fetchDanmu(
       title,
       episode,
       year,
+      tmdbId,
     );
     if (!matched) return emptyResult;
 
@@ -1099,6 +1081,7 @@ export async function GET(request: Request) {
   const manualAnimeTitle = searchParams.get('anime_title') || undefined;
   const manualEpisodeTitle = searchParams.get('episode_title') || undefined;
   const year = searchParams.get('year') || undefined;
+  const tmdbId = parsePositiveInt(searchParams.get('tmdb_id')) || undefined;
   const forceRefresh = searchParams.get('force') === '1';
   const episodeParsed = parsePositiveInt(episodeStr);
   const episode = episodeParsed || 1;
@@ -1241,7 +1224,7 @@ export async function GET(request: Request) {
       {
         code: 503,
         message:
-          '弹弹Play API 凭证未配置（缺少 DANDANPLAY_APP_ID / DANDANPLAY_APP_SECRET 环境变量）。如使用官方 Docker 镜像，请确保镜像版本正确。',
+          '弹弹play API 凭证未配置。请在服务端设置 DANDANPLAY_APP_ID 与 DANDANPLAY_APP_SECRET；Vercel 部署请在 Environment Variables 中将密钥设为 Sensitive 后重新部署。',
         danmus: [],
         count: 0,
       },
@@ -1265,6 +1248,7 @@ export async function GET(request: Request) {
             title || '',
             episode,
             year,
+            tmdbId,
             forceRefresh,
           );
 

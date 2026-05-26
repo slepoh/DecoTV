@@ -133,6 +133,7 @@ function isPublicModeAllowedPath(pathname: string): boolean {
     '/api/tmdb',
     '/api/private-library',
     '/api/source-browser',
+    '/api/danmu-external',
   ];
 
   return publicApis.some((path) => pathname.startsWith(path));

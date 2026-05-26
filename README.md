@@ -57,7 +57,7 @@
 - 👤 **用户注册系统**：支持用户自助注册（可选），带图形验证码防机器人。
 - 📱 **PWA**：离线缓存、安装到桌面/主屏，移动端原生体验。
 - 🌗 **响应式布局**：桌面侧边栏 + 移动底部导航，自适应各种屏幕尺寸。
-- 📺 **弹幕功能**：集成弹弹play弹幕库，官方镜像开箱即用，支持模糊匹配优化、手动匹配与多节点自定义配置。
+- 📺 **弹幕功能**：集成弹弹play开放平台，支持 TMDB 精确匹配、模糊匹配回退、手动匹配与多节点自定义配置。
 - ☁️ **PanSou 网盘搜索**：支持对接远程 PanSou 节点，提供聚合网盘搜索能力，并可在后台灵活配置节点与鉴权。
 - ⬇️ **视频资源下载能力**：支持浏览器分片下载与服务端 FFmpeg 转存下载，增强任务管理、重试与超时处理。
 - 📡 **灵活直播体验**：支持多直播源配置、分页切换优化与 m3u8/flv/mp4 自动识别处理。
@@ -471,9 +471,27 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 
 ### 弹幕功能配置
 
-DecoTV 集成了 [弹弹play开放平台](https://www.dandanplay.com/) 提供的弹幕库，让您在观看视频时享受弹幕互动体验。
+DecoTV 集成了 [弹弹play开放平台](https://www.dandanplay.com/) 提供的弹幕库。应用通过服务端 `/api/danmu-external` 生成签名并转发请求，浏览器不会收到 `AppSecret`。当视频数据包含 TMDB ID 时，自动匹配会优先使用开放平台的 `tmdbId + episode` 查询，失败时再按标题回退；获取弹幕使用官方推荐的 `withRelated=true` 汇集关联来源。
 
-**🎉 开箱即用**：官方 Docker 镜像已内置弹幕服务凭证，无需任何配置即可使用弹幕功能。
+弹弹play开放平台要求妥善保管 `AppSecret`。不要将真实密钥提交到仓库、写入 `NEXT_PUBLIC_*` 环境变量、打包进可分发 Docker 镜像或提供给前端签名。
+
+#### Vercel 部署
+
+1. 在 [弹弹play DevCenter](https://dev.dandanplay.com/) 创建或关联自己的应用，取得 `AppId` 和一个有效的 `AppSecret`。
+2. 在 Vercel 项目的 `Settings > Environment Variables` 中创建 `DANDANPLAY_APP_ID` 和 `DANDANPLAY_APP_SECRET`。为 `DANDANPLAY_APP_SECRET` 启用 **Sensitive**，并按需选择 `Production` / `Preview` 环境。
+3. 保存变量后重新部署。已有部署不会自动获得后来新增的环境变量。
+
+`DANDANPLAY_APP_SECRET` 没有 `NEXT_PUBLIC_` 前缀，只在 Next.js Node.js Route Handler 运行时读取；Vercel Sensitive 环境变量创建后不可回读，适合保存该密钥。Vercel 部署者无需自行再对密钥做一层可逆加密，因为解密密钥最终仍必须保存在服务端环境中。
+
+#### Docker 与公开部署
+
+Docker 镜像不再内置共享 `AppSecret`。运行容器时从服务端环境注入自己的凭证，例如创建不会提交到 Git 的 `.env.docker.local`，其中只放入 `DANDANPLAY_APP_ID` 和 `DANDANPLAY_APP_SECRET`，然后运行：
+
+```bash
+docker run --env-file .env.docker.local -p 3000:3000 decotv
+```
+
+对于可由任何人 fork 的公开站点，无法在静态前端或公开镜像中安全分发维护者的 `AppSecret`。可行路径是每个部署者配置自己的 DevCenter 凭证，或由维护者提供受访问控制、带限流和缓存的服务端弹幕代理，并先确认符合弹弹play开放平台使用约定。
 
 > 感谢 [弹弹play](https://www.dandanplay.com/) 为 DecoTV 提供弹幕服务支持！
 

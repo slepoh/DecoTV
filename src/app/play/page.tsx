@@ -830,18 +830,20 @@ function PlayPageClient() {
   const [manualDanmuOverrides, setManualDanmuOverrides] = useState<
     Record<string, DanmuManualSelection>
   >({});
-  const danmuScopeKey = `${videoDoubanId || videoTitle}_${videoYear || ''}_${currentEpisodeIndex + 1}`;
+  const danmuScopeKey = `${videoTmdbId || videoDoubanId || videoTitle}_${videoYear || ''}_${currentEpisodeIndex + 1}`;
   const activeManualDanmuOverride = manualDanmuOverrides[danmuScopeKey] || null;
 
   // 弹幕 Hook
   const {
     danmuList,
     loading: danmuLoading,
+    error: danmuError,
     matchInfo,
     loadMeta,
     reload: reloadDanmu,
   } = useDanmu({
     doubanId: videoDoubanId || undefined,
+    tmdbId: videoTmdbId || undefined,
     title: videoTitle,
     year: videoYear,
     episode: currentEpisodeIndex + 1,
@@ -849,7 +851,8 @@ function PlayPageClient() {
   });
   const danmuCount = danmuList.length;
   const isDanmuBusy = isDanmuReloading || danmuLoading;
-  const isDanmuEmpty = !danmuLoading && danmuCount === 0;
+  const isDanmuError = !danmuLoading && !!danmuError;
+  const isDanmuEmpty = !danmuLoading && !danmuError && danmuCount === 0;
   const isDanmuManualOverridden = !!activeManualDanmuOverride;
   const shownEmptyDanmuHintRef = useRef('');
   const [showDanmuMeta, setShowDanmuMeta] = useState(false);
@@ -869,6 +872,9 @@ function PlayPageClient() {
     const level = matchInfo.matchLevel.toLowerCase();
     if (level.includes('manual')) {
       return '手动覆盖';
+    }
+    if (level.includes('tmdb-id')) {
+      return 'TMDB 精确匹配';
     }
     if (level.includes('exact') || level.includes('perfect')) {
       return '精确匹配';
@@ -1250,7 +1256,12 @@ function PlayPageClient() {
       }
     } catch (err) {
       console.error('[Danmu] Reload failed:', err);
-      showToast(options?.errorMessage || '刷新弹幕失败', 'error');
+      showToast(
+        err instanceof Error
+          ? err.message
+          : options?.errorMessage || '刷新弹幕失败',
+        'error',
+      );
     } finally {
       isDanmuReloadingRef.current = false;
       setIsDanmuReloading(false);
@@ -1334,6 +1345,7 @@ function PlayPageClient() {
 
   useEffect(() => {
     if (danmuLoading) return;
+    if (danmuError) return;
     if (!videoDoubanId && !videoTitle) return;
     if (danmuCount > 0) return;
 
@@ -1364,6 +1376,7 @@ function PlayPageClient() {
   }, [
     currentEpisodeIndex,
     danmuCount,
+    danmuError,
     danmuLoading,
     danmuScopeKey,
     reloadDanmu,
@@ -3950,20 +3963,28 @@ function PlayPageClient() {
                         type='button'
                         onClick={() => setShowDanmuMeta((prev) => !prev)}
                         className={`inline-flex items-center gap-1.5 text-xs font-medium ${
-                          isDanmuEmpty ? 'text-amber-200' : 'text-white/90'
+                          isDanmuError
+                            ? 'text-red-200'
+                            : isDanmuEmpty
+                              ? 'text-amber-200'
+                              : 'text-white/90'
                         } transition-colors hover:text-white`}
                         title='查看弹幕加载详情'
                       >
                         <span
                           className={`inline-block h-2 w-2 rounded-full ${
-                            isDanmuEmpty
-                              ? 'bg-amber-300 animate-pulse'
-                              : 'bg-cyan-400'
+                            isDanmuError
+                              ? 'bg-red-400'
+                              : isDanmuEmpty
+                                ? 'bg-amber-300 animate-pulse'
+                                : 'bg-cyan-400'
                           }`}
                         />
                         {danmuLoading && danmuCount === 0
                           ? '弹幕加载中...'
-                          : `弹幕 ${danmuCount} 条`}
+                          : isDanmuError
+                            ? '弹幕加载失败'
+                            : `弹幕 ${danmuCount} 条`}
                       </button>
                       {!danmuLoading &&
                         (matchInfo || activeManualDanmuOverride) && (
@@ -4119,6 +4140,11 @@ function PlayPageClient() {
                             {danmuLoadSourceText}
                           </span>
                         </p>
+                        {danmuError && (
+                          <p className='rounded bg-red-400/15 px-2 py-1.5 text-red-100'>
+                            {danmuError.message}
+                          </p>
+                        )}
                         <p className='flex items-center justify-between gap-3'>
                           <span className='text-white/55'>最近加载</span>
                           <span className='text-right text-white/90'>

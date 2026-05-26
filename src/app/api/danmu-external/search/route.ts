@@ -1,12 +1,15 @@
 /* eslint-disable no-console */
-import { createHash } from 'crypto';
 import { NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
+import {
+  buildDandanplayEpisodeSearchUrl,
+  buildDandanplayHeaders,
+  getDandanplayCredentials,
+} from '@/lib/dandanplay';
 
 export const runtime = 'nodejs';
 
-const DANDANPLAY_API_BASE = 'https://api.dandanplay.net';
 const SEARCH_TIMEOUT_MS = 20_000;
 const CUSTOM_SEARCH_ANIME_LIMIT = 10;
 
@@ -30,49 +33,6 @@ interface SearchAnimeBase {
   type: string;
   typeDescription?: string;
   imageUrl?: string;
-}
-
-function getDandanplayCredentials() {
-  return {
-    appId: process.env.DANDANPLAY_APP_ID || '',
-    appSecret: process.env.DANDANPLAY_APP_SECRET || '',
-  };
-}
-
-function generateDandanplaySignature(
-  appId: string,
-  appSecret: string,
-  path: string,
-  timestamp: number,
-): string {
-  const data = appId + timestamp + path + appSecret;
-  return createHash('sha256').update(data).digest('base64');
-}
-
-function buildDandanplayHeaders(
-  appId: string,
-  appSecret: string,
-  path: string,
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-    'User-Agent': 'DecoTV/1.0',
-  };
-
-  if (appId && appSecret) {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signature = generateDandanplaySignature(
-      appId,
-      appSecret,
-      path,
-      timestamp,
-    );
-    headers['X-AppId'] = appId;
-    headers['X-Timestamp'] = String(timestamp);
-    headers['X-Signature'] = signature;
-  }
-
-  return headers;
 }
 
 function parsePositiveInt(value: unknown): number | null {
@@ -242,13 +202,13 @@ async function searchFromDandanplay(keyword: string) {
       ok: false,
       status: 503,
       message:
-        '弹弹Play API 凭证未配置（缺少 DANDANPLAY_APP_ID / DANDANPLAY_APP_SECRET）',
+        '弹弹play API 凭证未配置（缺少服务端 DANDANPLAY_APP_ID / DANDANPLAY_APP_SECRET）',
       animes: [] as SearchAnimeItem[],
     };
   }
 
   const path = '/api/v2/search/episodes';
-  const url = `${DANDANPLAY_API_BASE}${path}?anime=${encodeURIComponent(keyword)}&episode=`;
+  const url = buildDandanplayEpisodeSearchUrl({ anime: keyword });
   const headers = buildDandanplayHeaders(appId, appSecret, path);
 
   try {
@@ -261,7 +221,7 @@ async function searchFromDandanplay(keyword: string) {
       return {
         ok: false,
         status: 502,
-        message: `弹弹Play 搜索失败: HTTP ${response.status}`,
+        message: `弹弹play 搜索失败: HTTP ${response.status}`,
         animes: [] as SearchAnimeItem[],
       };
     }
@@ -271,7 +231,7 @@ async function searchFromDandanplay(keyword: string) {
       return {
         ok: false,
         status: 502,
-        message: `弹弹Play 搜索返回错误: ${data?.errorMessage || 'unknown'}`,
+        message: `弹弹play 搜索返回错误: ${data?.errorMessage || 'unknown'}`,
         animes: [] as SearchAnimeItem[],
       };
     }
@@ -286,7 +246,7 @@ async function searchFromDandanplay(keyword: string) {
     return {
       ok: false,
       status: 502,
-      message: formatSearchErrorMessage('弹弹Play 搜索异常', err),
+      message: formatSearchErrorMessage('弹弹play 搜索异常', err),
       animes: [] as SearchAnimeItem[],
     };
   }

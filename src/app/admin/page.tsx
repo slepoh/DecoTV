@@ -7762,14 +7762,14 @@ const DanmuConfigComponent = ({ config, refreshConfig }: DanmuConfigProps) => {
               <p className='text-sm font-medium text-gray-900 dark:text-gray-100'>
                 {danmuSettings.enabled
                   ? '自定义弹幕服务已启用'
-                  : '使用内置弹弹play弹幕服务'}
+                  : '使用弹弹play开放平台服务'}
               </p>
               <p className='text-xs text-gray-500 dark:text-gray-400 mt-0.5'>
                 {danmuSettings.enabled
                   ? danmuSettings.serverUrl
                     ? `服务器: ${getFullServerUrl()}`
                     : '请配置弹幕服务器地址'
-                  : '当前使用 Docker 镜像内置的弹弹play API 提供弹幕'}
+                  : '凭证由服务端环境变量提供，支持 Docker 与 Vercel 部署'}
               </p>
             </div>
           </div>

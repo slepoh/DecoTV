@@ -127,6 +127,7 @@ function saveSettingsToStorage(settings: DanmuSettings): void {
 
 interface UseDanmuParams {
   doubanId?: number | string | null;
+  tmdbId?: number | string | null;
   title?: string;
   year?: string;
   episode?: number;
@@ -134,7 +135,7 @@ interface UseDanmuParams {
 }
 
 export function useDanmu(params: UseDanmuParams): UseDanmuResult {
-  const { doubanId, title, year, episode, manualOverride } = params;
+  const { doubanId, tmdbId, title, year, episode, manualOverride } = params;
 
   const [danmuList, setDanmuList] = useState<DanmuItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -155,6 +156,9 @@ export function useDanmu(params: UseDanmuParams): UseDanmuResult {
   }, []);
 
   const getCacheKey = useCallback(() => {
+    if (tmdbId) {
+      return `danmu_tmdb_${tmdbId}_${episode || 1}`;
+    }
     if (doubanId) {
       return `danmu_${doubanId}_${episode || 1}`;
     }
@@ -162,12 +166,13 @@ export function useDanmu(params: UseDanmuParams): UseDanmuResult {
       return `danmu_${title}_${year || ''}_${episode || 1}`;
     }
     return '';
-  }, [doubanId, title, year, episode]);
+  }, [doubanId, tmdbId, title, year, episode]);
 
   const fetchDanmu = useCallback(
     async (options?: {
       force?: boolean;
       retryOnEmpty?: boolean;
+      throwOnError?: boolean;
       manualOverride?: DanmuManualOverride | null;
     }): Promise<number> => {
       const force = options?.force === true;
@@ -209,6 +214,7 @@ export function useDanmu(params: UseDanmuParams): UseDanmuResult {
       const fetchFromApi = async (forceRefresh: boolean) => {
         const queryParams = new URLSearchParams();
         if (doubanId) queryParams.set('douban_id', String(doubanId));
+        if (tmdbId) queryParams.set('tmdb_id', String(tmdbId));
         if (title) queryParams.set('title', title);
         if (year) queryParams.set('year', year);
         if (episode) queryParams.set('episode', String(episode));
@@ -233,16 +239,21 @@ export function useDanmu(params: UseDanmuParams): UseDanmuResult {
           },
         );
 
+        const data = await response.json();
         if (!response.ok) {
-          throw new Error(`Failed to fetch danmu: ${response.status}`);
+          throw new Error(
+            typeof data.message === 'string'
+              ? data.message
+              : `弹幕请求失败: HTTP ${response.status}`,
+          );
         }
 
-        const data = await response.json();
         if (data.code !== 200 || !Array.isArray(data.danmus)) {
-          return {
-            danmus: [] as DanmuItem[],
-            match: null as DanmuMatchInfo | null,
-          };
+          throw new Error(
+            typeof data.message === 'string'
+              ? data.message
+              : '弹幕响应格式无效',
+          );
         }
 
         return {
@@ -335,12 +346,15 @@ export function useDanmu(params: UseDanmuParams): UseDanmuResult {
         return 0;
       } catch (err) {
         console.error('[useDanmu] Fetch error:', err);
-        setError(
-          err instanceof Error ? err : new Error('Failed to load danmu'),
-        );
+        const normalizedError =
+          err instanceof Error ? err : new Error('加载弹幕失败');
+        setError(normalizedError);
         setDanmuList([]);
         setMatchInfo(null);
         setLoadMeta({ source: 'error', loadedAt: Date.now(), count: 0 });
+        if (options?.throwOnError) {
+          throw normalizedError;
+        }
         return 0;
       } finally {
         setLoading(false);
@@ -348,6 +362,7 @@ export function useDanmu(params: UseDanmuParams): UseDanmuResult {
     },
     [
       doubanId,
+      tmdbId,
       title,
       year,
       episode,
@@ -372,7 +387,7 @@ export function useDanmu(params: UseDanmuParams): UseDanmuResult {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doubanId, title, year, episode, manualOverride]);
+  }, [doubanId, tmdbId, title, year, episode, manualOverride]);
 
   const updateSettings = useCallback((newSettings: Partial<DanmuSettings>) => {
     setSettings((prev) => {
@@ -409,6 +424,7 @@ export function useDanmu(params: UseDanmuParams): UseDanmuResult {
       return fetchDanmu({
         force: true,
         retryOnEmpty: false,
+        throwOnError: true,
         manualOverride: options?.manualOverride,
       });
     },
