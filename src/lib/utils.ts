@@ -3,6 +3,7 @@ import he from 'he';
 import Hls from 'hls.js';
 
 import { resolveImageUrl } from './image-url';
+import { isLikelyHlsUrl } from './player/hls-url';
 
 export function processImageUrl(originalUrl: string): string {
   return resolveImageUrl(originalUrl, { wsrvWidth: 256 });
@@ -15,6 +16,7 @@ export interface VideoSourceTestResult {
   loadSpeed: string;
   pingTime: number;
   speedKBps?: number;
+  startupTimeMs?: number;
   hasError?: boolean;
   status?: VideoSourceTestStatus;
   message?: string;
@@ -24,10 +26,6 @@ export interface VideoSourceTestResult {
 
 const DEFAULT_SOURCE_TEST_TIMEOUT_MS = 10000;
 const NATIVE_REACHABILITY_TIMEOUT_MS = 3000;
-
-function isLikelyHlsUrl(url: string): boolean {
-  return /\.m3u8(?:$|[?#])/i.test(url) || /\/m3u8(?:$|[/?#])/i.test(url);
-}
 
 function qualityFromWidth(width: number): string {
   if (!width || width <= 0) return '未知';
@@ -82,10 +80,18 @@ function getStatsLoadedBytes(stats: any, payload: any): number {
 async function probeUrlReachability(
   url: string,
   timeoutMs = NATIVE_REACHABILITY_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<{ reachable: boolean; responseMs: number; message?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = performance.now();
+  const abortFromParent = () => controller.abort();
+
+  if (signal?.aborted) {
+    controller.abort();
+  } else {
+    signal?.addEventListener('abort', abortFromParent, { once: true });
+  }
 
   try {
     const response = await fetch(url, {
@@ -113,6 +119,7 @@ async function probeUrlReachability(
     };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', abortFromParent);
   }
 }
 
@@ -120,6 +127,7 @@ function buildResult(input: {
   quality: string;
   pingTime: number;
   speedKBps?: number;
+  startupTimeMs?: number;
   status: VideoSourceTestStatus;
   message?: string;
   playable?: boolean;
@@ -129,6 +137,10 @@ function buildResult(input: {
     loadSpeed: formatVideoLoadSpeed(input.speedKBps),
     pingTime: Math.max(0, Math.round(input.pingTime || 0)),
     speedKBps: input.speedKBps,
+    startupTimeMs:
+      typeof input.startupTimeMs === 'number'
+        ? Math.max(0, Math.round(input.startupTimeMs))
+        : undefined,
     hasError: input.status === 'failed',
     status: input.status,
     message: input.message,
@@ -140,6 +152,7 @@ function buildResult(input: {
 async function measureNativeVideoSource(
   url: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<VideoSourceTestResult> {
   return new Promise((resolve) => {
     const video = document.createElement('video');
@@ -152,11 +165,16 @@ async function measureNativeVideoSource(
     const startedAt = performance.now();
     let timeout: ReturnType<typeof setTimeout> | null = null;
     let failureCheckStarted = false;
+    let abortHandler: (() => void) | null = null;
 
     const finish = (status: VideoSourceTestStatus, message?: string) => {
       if (finished) return;
       finished = true;
+      const elapsedMs = performance.now() - startedAt;
       if (timeout) clearTimeout(timeout);
+      if (abortHandler && signal) {
+        signal.removeEventListener('abort', abortHandler);
+      }
       video.removeAttribute('src');
       video.load();
       video.remove();
@@ -164,7 +182,8 @@ async function measureNativeVideoSource(
       resolve(
         buildResult({
           quality: qualityFromWidth(video.videoWidth),
-          pingTime: pingTime || performance.now() - startedAt,
+          pingTime: pingTime || elapsedMs,
+          startupTimeMs: status === 'ok' ? elapsedMs : undefined,
           status,
           message,
           playable: status !== 'failed',
@@ -172,12 +191,20 @@ async function measureNativeVideoSource(
       );
     };
 
+    abortHandler = () => finish('failed', '测速已取消');
+    if (signal?.aborted) {
+      abortHandler();
+      return;
+    }
+    signal?.addEventListener('abort', abortHandler, { once: true });
+
     const finishAfterReachabilityCheck = async (fallbackMessage: string) => {
       if (failureCheckStarted || finished) return;
       failureCheckStarted = true;
       const probe = await probeUrlReachability(
         url,
         Math.min(NATIVE_REACHABILITY_TIMEOUT_MS, timeoutMs),
+        signal,
       );
       if (finished) return;
 
@@ -204,7 +231,7 @@ async function measureNativeVideoSource(
 
 export async function getVideoResolutionFromM3u8(
   m3u8Url: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<VideoSourceTestResult> {
   if (!m3u8Url) {
     return buildResult({
@@ -227,7 +254,7 @@ export async function getVideoResolutionFromM3u8(
   const timeoutMs = options.timeoutMs || DEFAULT_SOURCE_TEST_TIMEOUT_MS;
 
   if (!isLikelyHlsUrl(m3u8Url) || !Hls.isSupported()) {
-    return measureNativeVideoSource(m3u8Url, timeoutMs);
+    return measureNativeVideoSource(m3u8Url, timeoutMs, options.signal);
   }
 
   return new Promise((resolve) => {
@@ -251,13 +278,18 @@ export async function getVideoResolutionFromM3u8(
     let quality = '未知';
     let pingTime = 0;
     let speedKBps = 0;
+    let startupTimeMs = 0;
     let fragmentStartTime = 0;
     let lastMessage = '';
     const startedAt = performance.now();
     let timeout: ReturnType<typeof setTimeout> | null = null;
+    let abortHandler: (() => void) | null = null;
 
     const cleanup = () => {
       if (timeout) clearTimeout(timeout);
+      if (abortHandler && options.signal) {
+        options.signal.removeEventListener('abort', abortHandler);
+      }
       try {
         hls.destroy();
       } catch {
@@ -290,12 +322,20 @@ export async function getVideoResolutionFromM3u8(
           quality,
           pingTime: pingTime || performance.now() - startedAt,
           speedKBps: speedKBps || undefined,
+          startupTimeMs: startupTimeMs || undefined,
           status: finalStatus,
           message: message || lastMessage,
           playable,
         }),
       );
     };
+
+    abortHandler = () => finish('failed', '测速已取消');
+    if (options.signal?.aborted) {
+      abortHandler();
+      return;
+    }
+    options.signal?.addEventListener('abort', abortHandler, { once: true });
 
     timeout = setTimeout(() => {
       finish(
@@ -362,6 +402,7 @@ export async function getVideoResolutionFromM3u8(
 
       if (loadedBytes > 0 && loadTime > 0) {
         speedKBps = loadedBytes / 1024 / (loadTime / 1000);
+        startupTimeMs ||= performance.now() - startedAt;
         lastMessage = '媒体分片可访问';
       }
 

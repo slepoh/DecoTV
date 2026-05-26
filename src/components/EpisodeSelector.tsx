@@ -8,6 +8,10 @@ import React, {
   useState,
 } from 'react';
 
+import {
+  comparePlaybackMetrics,
+  getPlaybackEvidenceTier,
+} from '@/lib/player/source-ranking';
 import { SearchResult } from '@/lib/types';
 import {
   getVideoResolutionFromM3u8,
@@ -19,7 +23,6 @@ import ExternalImage from '@/components/ExternalImage';
 // 定义视频信息类型
 type VideoInfo = VideoSourceTestResult;
 type SourceSortMode = 'default' | 'latency';
-const RESPONSE_TIE_BREAKER_MS = 300;
 
 interface SourceSortItem {
   source: SearchResult;
@@ -30,12 +33,9 @@ interface SourceSortItem {
   videoInfo?: VideoInfo;
 }
 
-function hasMeasuredLatency(videoInfo?: VideoInfo) {
+function hasMeasuredResult(videoInfo?: VideoInfo) {
   return Boolean(
-    videoInfo &&
-    !videoInfo.hasError &&
-    Number.isFinite(videoInfo.pingTime) &&
-    videoInfo.pingTime > 0,
+    videoInfo && !videoInfo.hasError && getPlaybackEvidenceTier(videoInfo) < 4,
   );
 }
 
@@ -43,11 +43,8 @@ function getLatencySortBucket(
   videoInfo: VideoInfo | undefined,
   isTesting: boolean,
 ) {
-  if (hasMeasuredLatency(videoInfo)) return 0;
-  if (videoInfo && !videoInfo.hasError) return 1;
-  if (isTesting) return 2;
-  if (!videoInfo) return 3;
-  return 4;
+  if (videoInfo) return getPlaybackEvidenceTier(videoInfo);
+  return isTesting ? 4 : 3;
 }
 
 function compareDefaultSourceOrder(a: SourceSortItem, b: SourceSortItem) {
@@ -57,14 +54,8 @@ function compareDefaultSourceOrder(a: SourceSortItem, b: SourceSortItem) {
 }
 
 function compareLatencyMetrics(a: SourceSortItem, b: SourceSortItem) {
-  const pingDiff = (a.videoInfo?.pingTime || 0) - (b.videoInfo?.pingTime || 0);
-  if (Math.abs(pingDiff) > RESPONSE_TIE_BREAKER_MS) return pingDiff;
-
-  const speedDiff =
-    (b.videoInfo?.speedKBps || 0) - (a.videoInfo?.speedKBps || 0);
-  if (speedDiff !== 0) return speedDiff;
-
-  if (pingDiff !== 0) return pingDiff;
+  const metricsDifference = comparePlaybackMetrics(a.videoInfo, b.videoInfo);
+  if (metricsDifference !== 0) return metricsDifference;
 
   if (a.isCurrentSource && !b.isCurrentSource) return -1;
   if (!a.isCurrentSource && b.isCurrentSource) return 1;
@@ -78,19 +69,8 @@ function compareLatencySourceOrder(a: SourceSortItem, b: SourceSortItem) {
     getLatencySortBucket(b.videoInfo, b.isTesting);
   if (bucketDiff !== 0) return bucketDiff;
 
-  if (hasMeasuredLatency(a.videoInfo) && hasMeasuredLatency(b.videoInfo)) {
+  if (hasMeasuredResult(a.videoInfo) && hasMeasuredResult(b.videoInfo)) {
     return compareLatencyMetrics(a, b);
-  }
-
-  if (
-    a.videoInfo &&
-    b.videoInfo &&
-    !a.videoInfo.hasError &&
-    !b.videoInfo.hasError
-  ) {
-    const speedDiff =
-      (b.videoInfo.speedKBps || 0) - (a.videoInfo.speedKBps || 0);
-    if (speedDiff !== 0) return speedDiff;
   }
 
   if (a.isCurrentSource && !b.isCurrentSource) return -1;
@@ -398,54 +378,6 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     }
   }, [precomputedVideoInfo]);
 
-  // 读取本地"优选和测速"开关，默认开启
-  const [optimizationEnabled] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('enableOptimization');
-      if (saved !== null) {
-        try {
-          return JSON.parse(saved);
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    return true;
-  });
-
-  // 当切换到换源tab并且有源数据时，异步获取视频信息 - 移除 attemptedSources 依赖避免循环触发
-  useEffect(() => {
-    const fetchVideoInfosInBatches = async () => {
-      if (
-        !optimizationEnabled || // 若关闭测速则直接退出
-        activeTab !== 'sources' ||
-        availableSources.length === 0
-      )
-        return;
-
-      // 筛选出尚未测速的播放源
-      const pendingSources = availableSources.filter((source) => {
-        const sourceKey = `${source.source}-${source.id}`;
-        return !attemptedSourcesRef.current.has(sourceKey);
-      });
-
-      if (pendingSources.length === 0) return;
-
-      const batchSize = Math.min(
-        2,
-        Math.max(1, Math.ceil(pendingSources.length / 2)),
-      );
-
-      for (let start = 0; start < pendingSources.length; start += batchSize) {
-        const batch = pendingSources.slice(start, start + batchSize);
-        await Promise.all(batch.map((source) => getVideoInfo(source)));
-      }
-    };
-
-    fetchVideoInfosInBatches();
-    // 依赖项保持与之前一致
-  }, [activeTab, availableSources, getVideoInfo, optimizationEnabled]);
-
   // 升序分页标签
   const categoriesAsc = useMemo(() => {
     return Array.from({ length: pageCount }, (_, i) => {
@@ -610,7 +542,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   const rankedLatencyItems = useMemo(
     () =>
       sourceItems
-        .filter((item) => hasMeasuredLatency(item.videoInfo))
+        .filter((item) => hasMeasuredResult(item.videoInfo))
         .sort(compareLatencyMetrics),
     [sourceItems],
   );
@@ -623,7 +555,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     return ranks;
   }, [rankedLatencyItems]);
 
-  const fastestLatencyItem = rankedLatencyItems[0] || null;
+  const bestPlaybackItem = rankedLatencyItems[0] || null;
 
   const testedSourceCount = useMemo(
     () => sourceItems.filter((item) => Boolean(item.videoInfo)).length,
@@ -651,23 +583,31 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     }
 
     if (sourceSortMode === 'latency') {
-      if (fastestLatencyItem?.videoInfo) {
+      if (bestPlaybackItem?.videoInfo) {
+        const startupText =
+          typeof bestPlaybackItem.videoInfo.startupTimeMs === 'number'
+            ? `首片 ${formatResponseTime(
+                bestPlaybackItem.videoInfo.startupTimeMs,
+              )}`
+            : `仅响应 ${formatResponseTime(
+                bestPlaybackItem.videoInfo.pingTime,
+              )}`;
         const speedText =
-          fastestLatencyItem.videoInfo.loadSpeed !== '未知'
-            ? ` · 速度 ${fastestLatencyItem.videoInfo.loadSpeed}`
+          bestPlaybackItem.videoInfo.loadSpeed !== '未知'
+            ? ` · 速度 ${bestPlaybackItem.videoInfo.loadSpeed}`
             : '';
-        return `最快响应 ${formatResponseTime(
-          fastestLatencyItem.videoInfo.pingTime,
-        )}${speedText} · ${fastestLatencyItem.source.source_name}`;
+        return `最佳首播 ${startupText}${speedText} · ${bestPlaybackItem.source.source_name}`;
       }
-      return failedSourceCount > 0 ? '测速完成，暂无可用响应' : '等待响应数据';
+      return failedSourceCount > 0
+        ? '测速完成，暂无可播放媒体样本'
+        : '等待首播数据';
     }
 
     if (hasManualTested) {
       return `已测速 ${testedSourceCount}/${availableSources.length}`;
     }
 
-    return '手动测速后按响应排序';
+    return '手动测速后按首播质量排序';
   })();
 
   const getSourceStatusBadge = (
@@ -705,7 +645,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
     if (videoInfo.status === 'partial' || videoInfo.pingTime > 0) {
       return {
-        label: '已连通',
+        label: '仅连通',
         className: 'text-sky-600 dark:text-sky-300',
       };
     }
@@ -944,7 +884,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                         }`}
                       >
                         <ArrowDownNarrowWide className='h-3 w-3' />
-                        响应
+                        首播
                       </button>
                     </div>
                     <div
@@ -1070,18 +1010,26 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                                 if (!videoInfo.hasError) {
                                   return (
                                     <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
-                                      {videoInfo.pingTime > 0 && (
+                                      {typeof videoInfo.startupTimeMs ===
+                                      'number' ? (
                                         <div
                                           className={`${getLatencyTextClassName(
-                                            videoInfo.pingTime,
+                                            videoInfo.startupTimeMs,
                                           )} font-medium text-xs`}
                                         >
-                                          响应{' '}
+                                          首片{' '}
+                                          {formatResponseTime(
+                                            videoInfo.startupTimeMs,
+                                          )}
+                                        </div>
+                                      ) : videoInfo.pingTime > 0 ? (
+                                        <div className='text-orange-600 dark:text-orange-400 font-medium text-xs'>
+                                          仅响应{' '}
                                           {formatResponseTime(
                                             videoInfo.pingTime,
                                           )}
                                         </div>
-                                      )}
+                                      ) : null}
                                       {videoInfo.loadSpeed !== '未知' ? (
                                         <div
                                           className={`${getSpeedTextClassName(
@@ -1092,7 +1040,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                                         </div>
                                       ) : (
                                         <div className='text-gray-500 dark:text-gray-400 font-medium text-xs'>
-                                          速度未测得
+                                          未取得媒体分片
                                         </div>
                                       )}
                                     </div>
