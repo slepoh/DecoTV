@@ -440,10 +440,16 @@ const CollapsibleTab = ({
 interface UserConfigProps {
   config: AdminConfig | null;
   role: 'owner' | 'admin' | null;
+  storageMode: 'cloud' | 'local';
   refreshConfig: () => Promise<void>;
 }
 
-const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
+const UserConfig = ({
+  config,
+  role,
+  storageMode,
+  refreshConfig,
+}: UserConfigProps) => {
   const { alertModal, showAlert, hideAlert } = useAlertModal();
   const { isLoading, withLoading } = useLoadingState();
   const [showAddUserForm, setShowAddUserForm] = useState(false);
@@ -515,6 +521,46 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
 
   // 获取用户组列表
   const userGroups = config?.UserConfig?.Tags || [];
+  const registrationEnabled = config?.UserConfig?.RegistrationEnabled === true;
+  const registrationDefaultUserGroup =
+    config?.UserConfig?.RegistrationDefaultUserGroup || '';
+  const registrationDefaultGroupExists =
+    !registrationDefaultUserGroup ||
+    userGroups.some((group) => group.name === registrationDefaultUserGroup);
+  const canManageRegistration = role === 'owner' && storageMode !== 'local';
+
+  const handleRegistrationSettingsChange = async (
+    enabled: boolean,
+    defaultUserGroup: string,
+    successMessage = enabled ? '公开注册已开启' : '公开注册已关闭',
+  ) => {
+    await withLoading('saveRegistrationSettings', async () => {
+      try {
+        const res = await fetch('/api/admin/user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'updateRegistrationSettings',
+            registrationEnabled: enabled,
+            registrationDefaultUserGroup: defaultUserGroup,
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `保存失败: ${res.status}`);
+        }
+
+        await refreshConfig();
+        showSuccess(successMessage, showAlert);
+      } catch (err) {
+        showError(
+          err instanceof Error ? err.message : '保存注册设置失败',
+          showAlert,
+        );
+      }
+    });
+  };
 
   // 处理用户组相关操作
   const handleUserGroupAction = async (
@@ -928,6 +974,133 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
 
   return (
     <div className='space-y-6'>
+      {/* 公开注册策略 */}
+      <div>
+        <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
+          公开注册
+        </h4>
+        <div className='space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40'>
+          <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+            <div>
+              <div className='flex items-center gap-2'>
+                <p className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+                  允许访客自行注册账号
+                </p>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                    storageMode === 'local'
+                      ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
+                      : registrationEnabled
+                        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                        : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                  }`}
+                >
+                  {storageMode === 'local'
+                    ? '存储不支持'
+                    : registrationEnabled
+                      ? '开放中'
+                      : '已关闭'}
+                </span>
+              </div>
+              <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                开启后，登录页会出现注册入口；关闭后服务端立即拒绝新的注册请求。
+              </p>
+            </div>
+            <button
+              type='button'
+              role='switch'
+              aria-label='允许访客自行注册账号'
+              aria-checked={registrationEnabled}
+              onClick={() =>
+                void handleRegistrationSettingsChange(
+                  !registrationEnabled,
+                  registrationDefaultUserGroup,
+                )
+              }
+              disabled={
+                !canManageRegistration || isLoading('saveRegistrationSettings')
+              }
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${
+                registrationEnabled
+                  ? buttonStyles.toggleOn
+                  : buttonStyles.toggleOff
+              } ${
+                !canManageRegistration || isLoading('saveRegistrationSettings')
+                  ? 'cursor-not-allowed opacity-50'
+                  : ''
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full ${
+                  buttonStyles.toggleThumb
+                } transition-transform ${
+                  registrationEnabled
+                    ? buttonStyles.toggleThumbOn
+                    : buttonStyles.toggleThumbOff
+                }`}
+              />
+            </button>
+          </div>
+
+          <div>
+            <label
+              htmlFor='registration-default-user-group'
+              className='mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300'
+            >
+              新注册用户默认用户组
+            </label>
+            <select
+              id='registration-default-user-group'
+              value={registrationDefaultUserGroup}
+              onChange={(event) =>
+                void handleRegistrationSettingsChange(
+                  registrationEnabled,
+                  event.target.value,
+                  '默认注册用户组已更新',
+                )
+              }
+              disabled={
+                !canManageRegistration || isLoading('saveRegistrationSettings')
+              }
+              className='w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100'
+            >
+              <option value=''>不分配用户组（默认拥有全部可用视频源）</option>
+              {!registrationDefaultGroupExists && (
+                <option value={registrationDefaultUserGroup}>
+                  已失效：{registrationDefaultUserGroup}
+                </option>
+              )}
+              {userGroups.map((group) => (
+                <option key={group.name} value={group.name}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+            {!registrationDefaultUserGroup && registrationEnabled && (
+              <p className='mt-2 text-xs text-yellow-700 dark:text-yellow-300'>
+                当前未设置默认用户组，新注册用户将不受用户组的视频源限制。
+              </p>
+            )}
+            {!registrationDefaultGroupExists && (
+              <p className='mt-2 text-xs text-red-600 dark:text-red-400'>
+                当前默认用户组已不存在，请重新选择；在修复前新用户不会自动分组。
+              </p>
+            )}
+            {storageMode === 'local' && (
+              <p className='mt-2 text-xs text-yellow-700 dark:text-yellow-300'>
+                LocalStorage 模式不支持多用户注册。配置 Redis、Upstash 或
+                Kvrocks 后即可在这里开启。
+              </p>
+            )}
+            {role !== 'owner' && storageMode !== 'local' && (
+              <p className='mt-2 text-xs text-gray-500 dark:text-gray-400'>
+                公开开放账号创建属于站点安全策略，仅站长可以修改。
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* 用户统计 */}
       <div>
         <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
@@ -10148,6 +10321,7 @@ function AdminPageClient() {
               <UserConfig
                 config={config}
                 role={role}
+                storageMode={storageMode}
                 refreshConfig={refreshConfigAfterMutation}
               />
             </CollapsibleTab>

@@ -67,6 +67,8 @@ export interface AdminConfig {
     LoginBackground?: string;
   };
   UserConfig: {
+    RegistrationEnabled: boolean;
+    RegistrationDefaultUserGroup: string;
     Users: {
       username: string;
       role: 'user' | 'admin' | 'owner';

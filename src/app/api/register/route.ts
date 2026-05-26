@@ -135,6 +135,20 @@ export async function GET(req: NextRequest) {
     const action = searchParams.get('action');
 
     if (action === 'captcha') {
+      const config = await getConfig();
+      if (!config.UserConfig.RegistrationEnabled) {
+        return NextResponse.json({ error: '注册功能未开启' }, { status: 403 });
+      }
+
+      const storageType =
+        process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
+      if (storageType === 'localstorage') {
+        return NextResponse.json(
+          { error: '当前存储模式不支持用户注册，请使用 Redis/Upstash/Kvrocks' },
+          { status: 400 },
+        );
+      }
+
       // 生成验证码
       const code = generateCaptcha();
       const sessionId = Math.random().toString(36).substring(2, 15);
@@ -175,9 +189,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     // 检查是否启用注册功能
-    const registrationEnabled =
-      process.env.NEXT_PUBLIC_ENABLE_REGISTRATION === 'true';
-    if (!registrationEnabled) {
+    const config = await getConfig();
+    if (!config.UserConfig.RegistrationEnabled) {
       return NextResponse.json({ error: '注册功能未开启' }, { status: 403 });
     }
 
@@ -254,17 +267,15 @@ export async function POST(req: NextRequest) {
     // 注册用户到数据库
     await db.registerUser(username, password);
 
-    // 获取配置并添加到用户列表
-    const config = await getConfig();
-
     // 检查是否已在配置中（理论上不应该存在）
     const existsInConfig = config.UserConfig.Users.some(
       (u) => u.username === username,
     );
 
     if (!existsInConfig) {
-      // 获取默认用户组设置
-      const defaultUserGroup = process.env.DEFAULT_REGISTRATION_GROUP?.trim();
+      // 获取后台配置的默认用户组设置
+      const defaultUserGroup =
+        config.UserConfig.RegistrationDefaultUserGroup.trim();
 
       // 验证默认用户组是否存在于配置中
       let validDefaultGroup: string | undefined;

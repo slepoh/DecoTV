@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
     AuthMode: getAuthMode(),
     PublicAllowAdmin: isPublicAdminAllowed(),
     Version: CURRENT_VERSION,
-    EnableRegistration: process.env.NEXT_PUBLIC_ENABLE_REGISTRATION === 'true',
+    EnableRegistration: config.UserConfig.RegistrationEnabled,
     // 🔒 成人内容过滤状态（新增）
     AdultFilterEnabled: adultFilterEnabled,
     // 🖼️ 登录页面背景图
@@ -60,5 +60,9 @@ export async function GET(request: NextRequest) {
         : '成人内容过滤已禁用（完整内容模式）',
     },
   };
-  return NextResponse.json(result);
+  return NextResponse.json(result, {
+    headers: {
+      'Cache-Control': 'no-store',
+    },
+  });
 }

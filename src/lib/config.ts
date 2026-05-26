@@ -66,6 +66,14 @@ function getDefaultSearchResultLoadMode(): SearchResultLoadMode {
     : 'infinite';
 }
 
+function getDefaultRegistrationEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ENABLE_REGISTRATION === 'true';
+}
+
+function getDefaultRegistrationUserGroup(): string {
+  return process.env.DEFAULT_REGISTRATION_GROUP?.trim() || '';
+}
+
 function normalizeForComparison(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => normalizeForComparison(item));
@@ -305,6 +313,8 @@ async function getInitConfig(
       SearchResultLoadMode: getDefaultSearchResultLoadMode(),
     },
     UserConfig: {
+      RegistrationEnabled: getDefaultRegistrationEnabled(),
+      RegistrationDefaultUserGroup: getDefaultRegistrationUserGroup(),
       Users: [],
     },
     SourceConfig: [],
@@ -429,6 +439,8 @@ export function getLocalModeConfig(): AdminConfig {
       SearchResultLoadMode: getDefaultSearchResultLoadMode(),
     },
     UserConfig: {
+      RegistrationEnabled: getDefaultRegistrationEnabled(),
+      RegistrationDefaultUserGroup: getDefaultRegistrationUserGroup(),
       Users: [
         {
           username: process.env.USERNAME || 'admin',
@@ -475,8 +487,14 @@ export async function getConfig(): Promise<AdminConfig> {
     return saveAdminConfigWithVerification(initConfig);
   }
 
+  const originalConfigSnapshot = JSON.stringify(
+    normalizeForComparison(adminConfig),
+  );
   const checkedConfig = configSelfCheck(adminConfig);
-  if (!isConfigConsistent(checkedConfig, adminConfig)) {
+  if (
+    JSON.stringify(normalizeForComparison(checkedConfig)) !==
+    originalConfigSnapshot
+  ) {
     return saveAdminConfigWithVerification(checkedConfig);
   }
 
@@ -536,7 +554,19 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   }
 
   if (!adminConfig.UserConfig) {
-    adminConfig.UserConfig = { Users: [] };
+    adminConfig.UserConfig = {
+      RegistrationEnabled: getDefaultRegistrationEnabled(),
+      RegistrationDefaultUserGroup: getDefaultRegistrationUserGroup(),
+      Users: [],
+    };
+  }
+  if (typeof adminConfig.UserConfig.RegistrationEnabled !== 'boolean') {
+    adminConfig.UserConfig.RegistrationEnabled =
+      getDefaultRegistrationEnabled();
+  }
+  if (typeof adminConfig.UserConfig.RegistrationDefaultUserGroup !== 'string') {
+    adminConfig.UserConfig.RegistrationDefaultUserGroup =
+      getDefaultRegistrationUserGroup();
   }
   if (
     !adminConfig.UserConfig.Users ||
