@@ -39,6 +39,7 @@ import {
   attachNextEpisodeCountdown,
   attachShortcutsOverlay,
 } from '@/lib/player/decoArtplayerTheme';
+import { isLikelyHlsUrl } from '@/lib/player/hls-url';
 import { SearchResult } from '@/lib/types';
 import { generateCacheKey, globalCache } from '@/lib/unified-cache';
 import {
@@ -309,14 +310,6 @@ function escapeAudioTrackHtml(rawValue: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-}
-
-function isLikelyHlsUrl(url: string): boolean {
-  if (!url) {
-    return false;
-  }
-
-  return /\.m3u8(?:$|[?#])/i.test(url) || /\/m3u8(?:$|[/?#])/i.test(url);
 }
 
 function sanitizePlaybackRate(value: unknown): number {
@@ -1578,7 +1571,6 @@ function PlayPageClient() {
     // 会按原生媒体再尝试一次并触发错误，影响真实播放链路。
     if (!shouldUseNativeSource) {
       sources.forEach((s) => s.remove());
-      video.removeAttribute('src');
     } else {
       const existed = sources.some((s) => s.src === url);
       if (!existed) {
@@ -2981,6 +2973,7 @@ function PlayPageClient() {
       const savedPlaybackRate = loadPlaybackRate();
       lastPlaybackRateRef.current = savedPlaybackRate;
 
+      artPlayerRef.current.option.type = isLikelyHlsUrl(videoUrl) ? 'm3u8' : '';
       artPlayerRef.current.switch = videoUrl;
       artPlayerRef.current.title = `${videoTitle} - 第${
         currentEpisodeIndex + 1
@@ -3014,6 +3007,7 @@ function PlayPageClient() {
       artPlayerRef.current = new Artplayer({
         container: artRef.current,
         url: videoUrl,
+        type: isLikelyHlsUrl(videoUrl) ? 'm3u8' : '',
         poster: videoCover,
         volume: 0.7,
         isLive: false,
