@@ -57,7 +57,7 @@
 - 👤 **用户注册系统**：支持用户自助注册（可选），带图形验证码防机器人。
 - 📱 **PWA**：离线缓存、安装到桌面/主屏，移动端原生体验。
 - 🌗 **响应式布局**：桌面侧边栏 + 移动底部导航，自适应各种屏幕尺寸。
-- 📺 **弹幕功能**：集成弹弹play开放平台，支持 TMDB 精确匹配、模糊匹配回退、手动匹配与多节点自定义配置。
+- 📺 **弹幕功能**：集成弹弹play开放平台托管中继，Docker / Vercel 可开箱加载弹幕，并支持 TMDB 精确匹配、手动匹配与第三方自定义节点。
 - ☁️ **PanSou 网盘搜索**：支持对接远程 PanSou 节点，提供聚合网盘搜索能力，并可在后台灵活配置节点与鉴权。
 - ⬇️ **视频资源下载能力**：支持浏览器分片下载与服务端 FFmpeg 转存下载，增强任务管理、重试与超时处理。
 - 📡 **灵活直播体验**：支持多直播源配置、分页切换优化与 m3u8/flv/mp4 自动识别处理。
@@ -471,27 +471,49 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 
 ### 弹幕功能配置
 
-DecoTV 集成了 [弹弹play开放平台](https://www.dandanplay.com/) 提供的弹幕库。应用通过服务端 `/api/danmu-external` 生成签名并转发请求，浏览器不会收到 `AppSecret`。当视频数据包含 TMDB ID 时，自动匹配会优先使用开放平台的 `tmdbId + episode` 查询，失败时再按标题回退；获取弹幕使用官方推荐的 `withRelated=true` 汇集关联来源。
+DecoTV 接入 [弹弹play开放平台](https://doc.dandanplay.com/open/) 提供的弹幕库。按照开放平台文档，应用取得的 `AppId` 与 `AppSecret` 需要妥善保管且不得泄露给他人；开放平台也明确建议开源前端项目通过自建服务端转发请求并将密钥保存在服务端。
 
-弹弹play开放平台要求妥善保管 `AppSecret`。不要将真实密钥提交到仓库、写入 `NEXT_PUBLIC_*` 环境变量、打包进可分发 Docker 镜像或提供给前端签名。
+本项目采用以下默认链路：
 
-#### Vercel 部署
+```text
+公开 Docker / Fork 后的 Vercel 部署
+  -> https://tv.katelya.eu.org/api/danmu-external
+  -> 弹弹play开放平台
+```
 
-1. 在 [弹弹play DevCenter](https://dev.dandanplay.com/) 创建或关联自己的应用，取得 `AppId` 和一个有效的 `AppSecret`。
-2. 在 Vercel 项目的 `Settings > Environment Variables` 中创建 `DANDANPLAY_APP_ID` 和 `DANDANPLAY_APP_SECRET`。为 `DANDANPLAY_APP_SECRET` 启用 **Sensitive**，并按需选择 `Production` / `Preview` 环境。
-3. 保存变量后重新部署。已有部署不会自动获得后来新增的环境变量。
+公开部署仅内置可公开访问的托管中继地址，不包含维护者的 `AppSecret`。用户拉取 Docker 镜像或 Fork 后部署到 Vercel 时，不需要配置弹弹play凭证即可加载官方弹幕。若部署本身配置了自有弹弹play凭证，则优先在该部署服务端直连官方 API；若后台启用了第三方自定义弹幕节点，则自定义节点优先级最高。
 
-`DANDANPLAY_APP_SECRET` 没有 `NEXT_PUBLIC_` 前缀，只在 Next.js Node.js Route Handler 运行时读取；Vercel Sensitive 环境变量创建后不可回读，适合保存该密钥。Vercel 部署者无需自行再对密钥做一层可逆加密，因为解密密钥最终仍必须保存在服务端环境中。
+当视频数据包含 TMDB ID 时，自动匹配会优先使用开放平台的 `tmdbId + episode` 查询，失败时再按标题回退；获取弹幕使用 `withRelated=true` 汇集关联来源。弹幕与搜索结果会在服务端/CDN 缓存，减少对开放平台的重复请求。
 
-#### Docker 与公开部署
+#### 维护者托管实例
 
-Docker 镜像不再内置共享 `AppSecret`。运行容器时从服务端环境注入自己的凭证，例如创建不会提交到 Git 的 `.env.docker.local`，其中只放入 `DANDANPLAY_APP_ID` 和 `DANDANPLAY_APP_SECRET`，然后运行：
+`https://tv.katelya.eu.org` 由现有 DecoTV Vercel 项目直接承担托管中继职责，不需要新建另一套站点代码或部署 `danmu_api`。仅在这个由维护者控制的实例中配置：
+
+```env
+DANDANPLAY_APP_ID=在DevCenter申请的AppId
+DANDANPLAY_APP_SECRET=轮换后的有效AppSecret
+```
+
+Vercel 中应将 `DANDANPLAY_APP_SECRET` 保存为 Sensitive Environment Variable，并在保存后重新部署 `tv.katelya.eu.org` 对应项目。托管实例收到来自公开部署的中继请求时，只会走其服务端弹弹play凭证，不会使用后台配置的第三方自定义弹幕节点。
+
+当托管调用量异常或需要临时维护时，可以只在该 Vercel 项目配置 `DANDANPLAY_PUBLIC_RELAY_ENABLED=false` 后重新部署，暂停公开实例的中继调用而保留 `tv.katelya.eu.org` 自身的官方弹幕链路。还应在 Vercel Firewall 对 `/api/danmu-external*` 设置合理的速率限制。
+
+#### 公开部署与私有覆盖
+
+公开 Docker 与 Vercel Fork 默认无需添加弹弹play环境变量。如需将私有部署改为自己的中继或完全禁用默认中继，可仅在该部署配置：
+
+```env
+DANDANPLAY_RELAY_URL=https://your-decotv-relay.example.com
+# 或 DANDANPLAY_RELAY_URL=disabled
+```
+
+持有自有 DevCenter 凭证的私有部署也可以配置 `DANDANPLAY_APP_ID` 与 `DANDANPLAY_APP_SECRET` 直接调用官方接口。Docker 应从未提交到 Git 的运行时环境文件注入自有凭证，例如：
 
 ```bash
 docker run --env-file .env.docker.local -p 3000:3000 decotv
 ```
 
-对于可由任何人 fork 的公开站点，无法在静态前端或公开镜像中安全分发维护者的 `AppSecret`。可行路径是每个部署者配置自己的 DevCenter 凭证，或由维护者提供受访问控制、带限流和缓存的服务端弹幕代理，并先确认符合弹弹play开放平台使用约定。
+不要将真实密钥提交到仓库、写入 `NEXT_PUBLIC_*` 环境变量、打包进公开镜像或提供给前端生成签名。弹弹play文档说明开放平台将在 **2026 年 6 月 25 日** 起启用应用分层与额度管理机制，因此托管实例应保持缓存开启，并在流量异常时进行限流或暂时关闭中继。
 
 > 感谢 [弹弹play](https://www.dandanplay.com/) 为 DecoTV 提供弹幕服务支持！
 

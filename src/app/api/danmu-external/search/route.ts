@@ -5,13 +5,20 @@ import { getConfig } from '@/lib/config';
 import {
   buildDandanplayEpisodeSearchUrl,
   buildDandanplayHeaders,
+  buildDandanplayRelayRequestUrl,
+  DANDANPLAY_NOT_CONFIGURED_MESSAGE,
+  DANDANPLAY_RELAY_REQUEST_HEADER,
   getDandanplayCredentials,
+  isDandanplayPublicRelayEnabled,
+  isDandanplayRelayRequest,
 } from '@/lib/dandanplay';
 
 export const runtime = 'nodejs';
 
 const SEARCH_TIMEOUT_MS = 20_000;
 const CUSTOM_SEARCH_ANIME_LIMIT = 10;
+const OFFICIAL_SEARCH_CACHE_CONTROL =
+  'public, max-age=300, s-maxage=7200, stale-while-revalidate=86400';
 
 interface SearchEpisodeItem {
   episodeId: number;
@@ -201,8 +208,7 @@ async function searchFromDandanplay(keyword: string) {
     return {
       ok: false,
       status: 503,
-      message:
-        '弹弹play API 凭证未配置（缺少服务端 DANDANPLAY_APP_ID / DANDANPLAY_APP_SECRET）',
+      message: DANDANPLAY_NOT_CONFIGURED_MESSAGE,
       animes: [] as SearchAnimeItem[],
     };
   }
@@ -248,6 +254,49 @@ async function searchFromDandanplay(keyword: string) {
       status: 502,
       message: formatSearchErrorMessage('弹弹play 搜索异常', err),
       animes: [] as SearchAnimeItem[],
+    };
+  }
+}
+
+async function searchFromManagedRelay(request: Request) {
+  const relayUrl = buildDandanplayRelayRequestUrl(request);
+  if (!relayUrl) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(relayUrl, {
+      headers: {
+        Accept: 'application/json',
+        [DANDANPLAY_RELAY_REQUEST_HEADER]: '1',
+      },
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    });
+    const data = await response.json();
+
+    return {
+      responseStatus: response.status,
+      headers: {
+        'Cache-Control':
+          response.headers.get('cache-control') ||
+          (response.ok ? OFFICIAL_SEARCH_CACHE_CONTROL : 'no-store'),
+        'X-DecoTV-Danmu-Source': 'managed-relay',
+      },
+      data,
+    };
+  } catch (err) {
+    return {
+      responseStatus: 502,
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-DecoTV-Danmu-Source': 'managed-relay',
+      },
+      data: {
+        code: 502,
+        message: formatSearchErrorMessage('DecoTV 托管弹幕中继请求失败', err),
+        source: 'managed-relay',
+        animes: [],
+      },
     };
   }
 }
@@ -377,6 +426,20 @@ async function searchFromCustomServer(
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const keyword = (searchParams.get('keyword') || '').trim();
+  const isRelayRequest = isDandanplayRelayRequest(request);
+
+  if (isRelayRequest && !isDandanplayPublicRelayEnabled()) {
+    return NextResponse.json(
+      {
+        code: 503,
+        message: 'DecoTV 托管弹幕中继已暂停服务',
+        source: 'managed-relay',
+        keyword,
+        animes: [],
+      },
+      { status: 503, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
 
   if (!keyword) {
     return NextResponse.json(
@@ -387,14 +450,16 @@ export async function GET(request: Request) {
 
   let danmuConfig: Awaited<ReturnType<typeof getConfig>>['DanmuConfig'] =
     undefined;
-  try {
-    const adminConfig = await getConfig();
-    danmuConfig = adminConfig.DanmuConfig;
-  } catch (err) {
-    console.warn(
-      '[danmu-search] Failed to read DanmuConfig, fallback to dandanplay:',
-      err instanceof Error ? err.message : String(err),
-    );
+  if (!isRelayRequest) {
+    try {
+      const adminConfig = await getConfig();
+      danmuConfig = adminConfig.DanmuConfig;
+    } catch (err) {
+      console.warn(
+        '[danmu-search] Failed to read DanmuConfig, fallback to dandanplay:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   const customConfig =
@@ -403,6 +468,19 @@ export async function GET(request: Request) {
           Awaited<ReturnType<typeof getConfig>>['DanmuConfig']
         >)
       : null;
+
+  if (!customConfig && !isRelayRequest) {
+    const { appId, appSecret } = getDandanplayCredentials();
+    if (!appId || !appSecret) {
+      const relayResult = await searchFromManagedRelay(request);
+      if (relayResult) {
+        return NextResponse.json(relayResult.data, {
+          status: relayResult.responseStatus,
+          headers: relayResult.headers,
+        });
+      }
+    }
+  }
 
   const searchResult = customConfig
     ? await searchFromCustomServer(keyword, customConfig)
@@ -432,6 +510,12 @@ export async function GET(request: Request) {
       animes: searchResult.animes,
       count: searchResult.animes.length,
     },
-    { headers: { 'Cache-Control': 'no-store, max-age=0' } },
+    {
+      headers: {
+        'Cache-Control': customConfig
+          ? 'no-store, max-age=0'
+          : OFFICIAL_SEARCH_CACHE_CONTROL,
+      },
+    },
   );
 }

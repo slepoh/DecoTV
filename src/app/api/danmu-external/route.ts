@@ -5,8 +5,13 @@ import { getCacheTime, getConfig } from '@/lib/config';
 import {
   buildDandanplayEpisodeSearchUrl,
   buildDandanplayHeaders,
+  buildDandanplayRelayRequestUrl,
   DANDANPLAY_API_BASE,
+  DANDANPLAY_NOT_CONFIGURED_MESSAGE,
+  DANDANPLAY_RELAY_REQUEST_HEADER,
   getDandanplayCredentials,
+  isDandanplayPublicRelayEnabled,
+  isDandanplayRelayRequest,
 } from '@/lib/dandanplay';
 
 export const runtime = 'nodejs';
@@ -88,6 +93,7 @@ const DANMU_TTL_EMPTY = 30 * 60 * 1000; // 空结果: 30分钟（快速重试）
 const CACHE_CLEANUP_INTERVAL = 10 * 60 * 1000; // 清理间隔: 10分钟
 const MAX_CACHE_SIZE = 2000; // 单个缓存 Map 的最大条目数
 const CUSTOM_SERVER_TIMEOUT_MS = 20_000;
+const RELAY_TIMEOUT_MS = 25_000;
 
 let lastCleanup = Date.now();
 
@@ -1055,6 +1061,74 @@ async function fetchFromCustomServerByEpisodeId(
   }
 }
 
+async function fetchFromManagedRelay(
+  request: Request,
+): Promise<NextResponse | null> {
+  const relayUrl = buildDandanplayRelayRequestUrl(request);
+  if (!relayUrl) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(relayUrl, {
+      headers: {
+        Accept: 'application/json',
+        [DANDANPLAY_RELAY_REQUEST_HEADER]: '1',
+      },
+      signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
+    });
+    const body = await response.text();
+    const headers = new Headers({
+      'X-DecoTV-Danmu-Source': 'managed-relay',
+    });
+
+    for (const header of ['cache-control', 'cdn-cache-control']) {
+      const value = response.headers.get(header);
+      if (value) {
+        headers.set(header, value);
+      }
+    }
+
+    try {
+      return NextResponse.json(JSON.parse(body) as unknown, {
+        status: response.status,
+        headers,
+      });
+    } catch {
+      return NextResponse.json(
+        {
+          code: response.ok ? 502 : response.status,
+          message: response.ok
+            ? 'DecoTV 托管弹幕中继返回了无效响应'
+            : `DecoTV 托管弹幕中继不可用: HTTP ${response.status}`,
+          danmus: [],
+          count: 0,
+          source: 'managed-relay',
+        },
+        {
+          status: response.ok ? 502 : response.status,
+          headers: {
+            'Cache-Control': 'no-store',
+            'X-DecoTV-Danmu-Source': 'managed-relay',
+          },
+        },
+      );
+    }
+  } catch (err) {
+    console.error('[danmu-relay] Managed relay request failed:', err);
+    return NextResponse.json(
+      {
+        code: 502,
+        message: 'DecoTV 托管弹幕中继请求失败，请稍后重试',
+        danmus: [],
+        count: 0,
+        source: 'managed-relay',
+      },
+      { status: 502, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+}
+
 // ============================================================================
 // Route Handler — 重构后的优先级逻辑
 //
@@ -1064,9 +1138,12 @@ async function fetchFromCustomServerByEpisodeId(
 //   - 即使环境变量 DANDANPLAY_APP_ID/SECRET 存在，也 **不会回落** 到弹弹play
 //   - 只有当自定义源返回空结果（非错误）时，才在响应中说明无弹幕
 //
-// 第二优先级（回落）：环境变量弹弹play
-//   - 只有当 DanmuConfig.enabled !== true（关闭/未配置）时才使用
-//   - 需要 DANDANPLAY_APP_ID 和 DANDANPLAY_APP_SECRET 环境变量
+// 第二优先级（回落）：本部署弹弹play凭证
+//   - 仅服务端使用 DANDANPLAY_APP_ID 和 DANDANPLAY_APP_SECRET
+//
+// 第三优先级：维护者托管中继
+//   - 公开 Docker / Vercel 部署无需持有凭证，转发至维护者控制的 DecoTV 实例
+//   - 中继请求会绕过该实例的自定义节点配置，直接使用其服务端凭证
 // ============================================================================
 
 export async function GET(request: Request) {
@@ -1087,6 +1164,20 @@ export async function GET(request: Request) {
   const episode = episodeParsed || 1;
   const requestedManualEpisode = searchParams.get('episode_id');
   const isManualOverride = requestedManualEpisode !== null;
+  const isRelayRequest = isDandanplayRelayRequest(request);
+
+  if (isRelayRequest && !isDandanplayPublicRelayEnabled()) {
+    return NextResponse.json(
+      {
+        code: 503,
+        message: 'DecoTV 托管弹幕中继已暂停服务',
+        danmus: [],
+        count: 0,
+        source: 'managed-relay',
+      },
+      { status: 503, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
 
   if (isManualOverride && !manualEpisodeId) {
     return NextResponse.json(
@@ -1114,16 +1205,18 @@ export async function GET(request: Request) {
     undefined;
   let configReadError: string | null = null;
 
-  try {
-    const adminConfig = await getConfig();
-    danmuConfig = adminConfig.DanmuConfig;
-  } catch (configErr) {
-    configReadError =
-      configErr instanceof Error ? configErr.message : String(configErr);
-    console.error(
-      '[danmu-external] Failed to read DanmuConfig:',
-      configReadError,
-    );
+  if (!isRelayRequest) {
+    try {
+      const adminConfig = await getConfig();
+      danmuConfig = adminConfig.DanmuConfig;
+    } catch (configErr) {
+      configReadError =
+        configErr instanceof Error ? configErr.message : String(configErr);
+      console.error(
+        '[danmu-external] Failed to read DanmuConfig:',
+        configReadError,
+      );
+    }
   }
 
   // ========================================================================
@@ -1220,11 +1313,17 @@ export async function GET(request: Request) {
   const { appId, appSecret } = getDandanplayCredentials();
 
   if (!appId || !appSecret) {
+    if (!isRelayRequest) {
+      const relayResponse = await fetchFromManagedRelay(request);
+      if (relayResponse) {
+        return relayResponse;
+      }
+    }
+
     return NextResponse.json(
       {
         code: 503,
-        message:
-          '弹弹play API 凭证未配置。请在服务端设置 DANDANPLAY_APP_ID 与 DANDANPLAY_APP_SECRET；Vercel 部署请在 Environment Variables 中将密钥设为 Sensitive 后重新部署。',
+        message: DANDANPLAY_NOT_CONFIGURED_MESSAGE,
         danmus: [],
         count: 0,
       },

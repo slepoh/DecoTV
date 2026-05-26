@@ -7762,14 +7762,14 @@ const DanmuConfigComponent = ({ config, refreshConfig }: DanmuConfigProps) => {
               <p className='text-sm font-medium text-gray-900 dark:text-gray-100'>
                 {danmuSettings.enabled
                   ? '自定义弹幕服务已启用'
-                  : '使用弹弹play开放平台服务'}
+                  : '弹弹play官方弹幕链路已启用'}
               </p>
               <p className='text-xs text-gray-500 dark:text-gray-400 mt-0.5'>
                 {danmuSettings.enabled
                   ? danmuSettings.serverUrl
                     ? `服务器: ${getFullServerUrl()}`
                     : '请配置弹幕服务器地址'
-                  : '凭证由服务端环境变量提供，支持 Docker 与 Vercel 部署'}
+                  : '优先使用本部署凭证，未配置时使用 DecoTV 托管中继'}
               </p>
             </div>
           </div>

@@ -43,16 +43,6 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v5
 
-      - name: Check built-in dandanplay credentials
-        if: github.event_name != 'pull_request'
-        env:
-          DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
-          DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
-        run: |
-          if [ -z "$DANDANPLAY_APP_ID" ] || [ -z "$DANDANPLAY_APP_SECRET" ]; then
-            echo "::warning::DANDANPLAY_APP_ID/DANDANPLAY_APP_SECRET not set; image will be built without built-in 弹弹play credentials."
-          fi
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -95,9 +85,6 @@ jobs:
           tags: |
             ghcr.io/${{ steps.lowercase.outputs.owner }}/decotv:${{ github.event.inputs.tag || 'latest' }}
             ghcr.io/${{ steps.lowercase.outputs.owner }}/decotv:${{ steps.version.outputs.version }}
-          build-args: |
-            DANDANPLAY_APP_ID=${{ secrets.DANDANPLAY_APP_ID || '' }}
-            DANDANPLAY_APP_SECRET=${{ secrets.DANDANPLAY_APP_SECRET || '' }}
           outputs: type=image,name=ghcr.io/${{ steps.lowercase.outputs.owner }}/decotv,name-canonical=true,push=true
 
       - name: Export digest
