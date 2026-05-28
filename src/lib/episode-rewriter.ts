@@ -5,21 +5,49 @@ import { getConfig } from '@/lib/config';
 import { signM3U8ProxyRequest } from '@/lib/m3u8-proxy';
 import { SearchResult } from '@/lib/types';
 
-/**
- * 解析广告过滤是否启用：admin 后台开关 > 环境变量 > 默认开。
- * admin 后台未配置时回落到 ENABLE_AD_FILTER；都没配置时默认 true。
- */
-function isAdFilterEnabled(adminConfig: AdminConfig | null): boolean {
-  const adminFlag = adminConfig?.AdFilterConfig?.enabled;
-  if (typeof adminFlag === 'boolean') return adminFlag;
-  const envFlag = process.env.ENABLE_AD_FILTER;
-  if (envFlag === undefined) return true;
-  return envFlag === 'true' || envFlag === '1';
+// Server-side HLS proxying is opt-in. Default playback should stay direct so a
+// reverse proxy does not turn normal playback into server transit traffic.
+function parseBooleanFlag(value: string | undefined): boolean | null {
+  if (value === undefined) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'on') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'off') {
+    return false;
+  }
+  return null;
 }
 
-function adFilterDisabledByQuery(request: NextRequest): boolean {
-  const v = request.nextUrl.searchParams.get('adfilter');
-  return v === 'false' || v === '0';
+function getQueryProxyMode(request: NextRequest): boolean | null {
+  const value = request.nextUrl.searchParams.get('adfilter');
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (['server', 'proxy', 'true', '1', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['direct', 'false', '0', 'off'].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+export function shouldUseServerSideEpisodeProxy(
+  adminConfig: AdminConfig | null,
+  request: NextRequest,
+): boolean {
+  const queryMode = getQueryProxyMode(request);
+  if (queryMode !== null) return queryMode;
+
+  const explicitProxyFlag =
+    parseBooleanFlag(process.env.M3U8_SERVER_PROXY) ??
+    parseBooleanFlag(process.env.ENABLE_M3U8_SERVER_PROXY);
+  if (explicitProxyFlag !== null) return explicitProxyFlag;
+
+  const adminFlag = adminConfig?.AdFilterConfig?.enabled;
+  if (typeof adminFlag === 'boolean') return adminFlag;
+
+  return parseBooleanFlag(process.env.ENABLE_AD_FILTER) === true;
 }
 
 function buildFilterProxyUrl(
@@ -71,8 +99,7 @@ export async function rewriteEpisodesForAdFilter<
 >(result: T, request: NextRequest): Promise<T> {
   if (!result) return result;
   const adminConfig = await safeGetConfig();
-  if (!isAdFilterEnabled(adminConfig) || adFilterDisabledByQuery(request))
-    return result;
+  if (!shouldUseServerSideEpisodeProxy(adminConfig, request)) return result;
   if (result.source === 'private_library') return result;
   if (isSourceDisabled(adminConfig, result.source)) return result;
   if (!Array.isArray(result.episodes) || result.episodes.length === 0)
@@ -90,8 +117,7 @@ export async function rewriteEpisodesForAdFilterMany(
   request: NextRequest,
 ): Promise<SearchResult[]> {
   const adminConfig = await safeGetConfig();
-  if (!isAdFilterEnabled(adminConfig) || adFilterDisabledByQuery(request))
-    return results;
+  if (!shouldUseServerSideEpisodeProxy(adminConfig, request)) return results;
 
   // 对每条结果按"源是否豁免"独立判断
   return results.map((r) => {

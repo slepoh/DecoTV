@@ -90,6 +90,7 @@ interface ChannelHealthInfo {
 const RECENT_GROUPS_STORAGE_KEY = 'liveRecentGroups';
 const PINNED_GROUPS_STORAGE_KEY = 'livePinnedGroups';
 const AUTO_FAILOVER_STORAGE_KEY = 'liveAutoFailover';
+const LIVE_DIRECT_CONNECT_STORAGE_KEY = 'liveDirectConnect';
 const MAX_RECENT_GROUPS = 8;
 const HEALTH_CHECK_CACHE_MS = 3 * 60 * 1000;
 const HEALTH_CHECK_BATCH_SIZE = 12;
@@ -258,7 +259,10 @@ function LivePageClient() {
   );
 
   // 直连模式状态
-  const [isDirectConnect, setIsDirectConnect] = useState(false);
+  const [isDirectConnect, setIsDirectConnect] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem(LIVE_DIRECT_CONNECT_STORAGE_KEY) === 'true';
+  });
   const [showDirectConnectTip, setShowDirectConnectTip] = useState(false);
 
   const normalizedChannelSearchQuery = channelSearchQuery.trim().toLowerCase();
@@ -658,6 +662,12 @@ function LivePageClient() {
     }
 
     const cacheKey = `${sourceKey}:${channel.url}`;
+    if (isDirectConnect) {
+      healthByUrlCacheRef.current[cacheKey] = fallbackInfo;
+      setChannelHealth(channel.id, fallbackInfo);
+      return fallbackInfo;
+    }
+
     const cachedInfo = healthByUrlCacheRef.current[cacheKey];
     if (
       !options?.force &&
@@ -1468,7 +1478,7 @@ function LivePageClient() {
   // 切换直连模式
   const handleDirectConnectToggle = (value: boolean) => {
     setIsDirectConnect(value);
-    localStorage.setItem('liveDirectConnect', JSON.stringify(value));
+    localStorage.setItem(LIVE_DIRECT_CONNECT_STORAGE_KEY, String(value));
     // 显示提示
     setShowDirectConnectTip(true);
     setTimeout(() => setShowDirectConnectTip(false), 5000);
@@ -1528,21 +1538,38 @@ function LivePageClient() {
     return flvLibRef.current;
   };
 
+  function isDecoProxyUrl(rawUrl: string) {
+    try {
+      const base =
+        typeof window !== 'undefined' ? window.location.href : 'http://local';
+      const parsed = new URL(rawUrl, base);
+      return (
+        typeof window !== 'undefined' &&
+        parsed.origin === window.location.origin &&
+        parsed.pathname.startsWith('/api/proxy/')
+      );
+    } catch {
+      return false;
+    }
+  }
+
   class CustomHlsJsLoader extends Hls.DefaultConfig.loader {
     constructor(config: any) {
       super(config);
       const load = this.load.bind(this);
       this.load = function (context: any, config: any, callbacks: any) {
-        // 所有的请求都带一个 source 参数
-        try {
-          const url = new URL(context.url);
-          url.searchParams.set(
-            'decotv-source',
-            currentSourceRef.current?.key || '',
-          );
-          context.url = url.toString();
-        } catch {
-          // ignore
+        // Only DecoTV proxy requests should receive DecoTV-specific params.
+        if (isDecoProxyUrl(context.url)) {
+          try {
+            const url = new URL(context.url, window.location.href);
+            url.searchParams.set(
+              'decotv-source',
+              currentSourceRef.current?.key || '',
+            );
+            context.url = url.toString();
+          } catch {
+            // ignore
+          }
         }
         // 拦截manifest和level请求
         if (
@@ -1550,10 +1577,11 @@ function LivePageClient() {
           (context as any).type === 'level'
         ) {
           // 判断是否浏览器直连
-          const isLiveDirectConnectStr =
-            localStorage.getItem('liveDirectConnect');
+          const isLiveDirectConnectStr = localStorage.getItem(
+            LIVE_DIRECT_CONNECT_STORAGE_KEY,
+          );
           const isLiveDirectConnect = isLiveDirectConnectStr === 'true';
-          if (isLiveDirectConnect) {
+          if (isLiveDirectConnect && isDecoProxyUrl(context.url)) {
             // 浏览器直连，使用 URL 对象处理参数
             try {
               const url = new URL(context.url);
@@ -1741,31 +1769,34 @@ function LivePageClient() {
       const precheckUrl = `/api/live/precheck?url=${encodedVideoUrl}&decotv-source=${sourceKey}`;
       let precheckLatencyMs: number | undefined;
       let precheckReachable = true;
+      const skipServerPrecheck = isDirectConnect;
 
-      try {
-        const precheckResponse = await fetch(precheckUrl, {
-          cache: 'no-store',
-        });
-        if (precheckResponse.ok) {
-          const precheckResult = await precheckResponse.json();
-          if (typeof precheckResult?.latencyMs === 'number') {
-            precheckLatencyMs = precheckResult.latencyMs;
-          }
-          if (precheckResult.success) {
-            const precheckedType = normalizeStreamType(precheckResult.type);
-            if (precheckedType !== 'unknown') {
-              type = precheckedType;
+      if (!skipServerPrecheck) {
+        try {
+          const precheckResponse = await fetch(precheckUrl, {
+            cache: 'no-store',
+          });
+          if (precheckResponse.ok) {
+            const precheckResult = await precheckResponse.json();
+            if (typeof precheckResult?.latencyMs === 'number') {
+              precheckLatencyMs = precheckResult.latencyMs;
+            }
+            if (precheckResult.success) {
+              const precheckedType = normalizeStreamType(precheckResult.type);
+              if (precheckedType !== 'unknown') {
+                type = precheckedType;
+              }
+            } else {
+              precheckReachable = false;
             }
           } else {
+            console.warn('预检查失败:', precheckResponse.statusText);
             precheckReachable = false;
           }
-        } else {
-          console.warn('预检查失败:', precheckResponse.statusText);
+        } catch (error) {
+          console.warn('预检查异常，回退到 URL 类型推断:', error);
           precheckReachable = false;
         }
-      } catch (error) {
-        console.warn('预检查异常，回退到 URL 类型推断:', error);
-        precheckReachable = false;
       }
 
       if (type === 'unknown') {
@@ -1774,10 +1805,13 @@ function LivePageClient() {
 
       const currentHealthInfo: ChannelHealthInfo = {
         type,
-        status: deriveHealthStatus(precheckReachable, precheckLatencyMs),
+        status: skipServerPrecheck
+          ? 'unknown'
+          : deriveHealthStatus(precheckReachable, precheckLatencyMs),
         latencyMs: precheckLatencyMs,
         checkedAt: Date.now(),
-        message: precheckReachable ? undefined : '预检查失败',
+        message:
+          skipServerPrecheck || precheckReachable ? undefined : '预检查失败',
       };
       setChannelHealth(currentChannel.id, currentHealthInfo);
       if (sourceKey) {
@@ -1815,19 +1849,13 @@ function LivePageClient() {
         flv: flvLoader,
       };
 
-      const targetUrl =
-        type === 'm3u8'
-          ? `/api/proxy/m3u8?url=${encodedVideoUrl}&decotv-source=${sourceKey}`
-          : type === 'flv'
-            ? `/api/proxy/stream?url=${encodedVideoUrl}&decotv-source=${sourceKey}`
-            : isDirectConnect
-              ? videoUrl
-              : `/api/proxy/stream?url=${encodedVideoUrl}&decotv-source=${sourceKey}`;
-
-      if (type === 'flv' && isDirectConnect) {
-        setAutoFailoverMessage('FLV 直播为保证稳定性已自动走代理播放');
-        setTimeout(() => setAutoFailoverMessage(null), 4000);
-      }
+      const proxyM3u8Url = `/api/proxy/m3u8?url=${encodedVideoUrl}&decotv-source=${sourceKey}`;
+      const proxyStreamUrl = `/api/proxy/stream?url=${encodedVideoUrl}&decotv-source=${sourceKey}`;
+      const targetUrl = isDirectConnect
+        ? videoUrl
+        : type === 'm3u8'
+          ? proxyM3u8Url
+          : proxyStreamUrl;
 
       try {
         // 创建新的播放器实例
