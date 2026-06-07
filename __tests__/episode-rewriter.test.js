@@ -8,15 +8,22 @@ const {
   shouldUseServerSideEpisodeProxy,
 } = require('../src/lib/episode-rewriter');
 
-function makeRequest(adfilter) {
+function makeRequest(adfilter, options = {}) {
   const searchParams = new URLSearchParams();
   if (adfilter !== undefined) {
     searchParams.set('adfilter', adfilter);
+  }
+  if (options.client) {
+    searchParams.set('client', options.client);
   }
 
   return {
     nextUrl: {
       searchParams,
+    },
+    headers: {
+      get: (name) =>
+        name.toLowerCase() === 'user-agent' ? options.userAgent : undefined,
     },
   };
 }
@@ -73,5 +80,21 @@ describe('shouldUseServerSideEpisodeProxy', () => {
         makeRequest('direct'),
       ),
     ).toBe(false);
+  });
+
+  it('keeps native TV clients direct unless the request explicitly opts in', () => {
+    expect(
+      shouldUseServerSideEpisodeProxy(
+        { AdFilterConfig: { enabled: true } },
+        makeRequest(undefined, { userAgent: 'OrionTV okhttp' }),
+      ),
+    ).toBe(false);
+
+    expect(
+      shouldUseServerSideEpisodeProxy(
+        { AdFilterConfig: { enabled: true } },
+        makeRequest('server', { client: 'oriontv' }),
+      ),
+    ).toBe(true);
   });
 });

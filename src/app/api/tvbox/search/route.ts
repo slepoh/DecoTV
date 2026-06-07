@@ -5,6 +5,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { rankSearchResults } from '@/lib/search-ranking';
+import {
+  buildResolutionFilterFromSearchParams,
+  filterSearchResultsByResolution,
+  formatResolutionLabel,
+} from '@/lib/video-quality';
 import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
@@ -58,6 +63,8 @@ export async function GET(request: NextRequest) {
     const filterRaw = searchParams.get('filter');
     const filterParam = (filterRaw ?? 'on').toLowerCase();
     const strictMode = searchParams.get('strict') === '1';
+    const resolutionFilter =
+      buildResolutionFilterFromSearchParams(searchParams);
 
     // 参数验证
     if (!sourceKey || !query) {
@@ -229,6 +236,18 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    if (results.length > 0) {
+      const beforeResolutionFilterCount = results.length;
+      results = filterSearchResultsByResolution(results, resolutionFilter);
+      if (resolutionFilter.minLevel) {
+        console.log(
+          `[TVBox Search Proxy] Resolution filter ${formatResolutionLabel(
+            resolutionFilter.minLevel,
+          )}${resolutionFilter.strict ? ' strict' : ''}: ${beforeResolutionFilterCount} → ${results.length}`,
+        );
+      }
+    }
+
     const processingTime = Date.now() - startTime;
     console.log(
       `[TVBox Search Proxy] Completed in ${processingTime}ms, returning ${results.length} results`,
@@ -250,7 +269,14 @@ export async function GET(request: NextRequest) {
           vod_id: r.id,
           vod_name: r.title,
           vod_pic: r.poster,
-          vod_remarks: raw.note || raw.remark || '',
+          vod_remarks:
+            raw.remarks ||
+            raw.note ||
+            raw.remark ||
+            r.resolution ||
+            r.quality_tag ||
+            '',
+          vod_resolution: r.resolution || '',
           vod_year: raw.year || '',
           vod_area: raw.area || '',
           vod_actor: raw.actor || '',
@@ -273,6 +299,10 @@ export async function GET(request: NextRequest) {
         'X-Processing-Time': `${processingTime}ms`,
         'X-Result-Count': `${results.length}`,
         'X-Filter-Applied': shouldFilter ? 'true' : 'false',
+        'X-Min-Resolution': resolutionFilter.minLevel
+          ? formatResolutionLabel(resolutionFilter.minLevel)
+          : 'off',
+        'X-Resolution-Strict': resolutionFilter.strict ? 'true' : 'false',
       },
     });
   } catch (error) {

@@ -8,7 +8,8 @@ OrionTV 是一个基于 React Native TVOS 和 Expo 构建的播放器，支持 A
 
 ## ✅ 支持的版本
 
-- ✅ **OrionTV 1.3.11**（最新版本，推荐）
+- ✅ **OrionTV 1.3.13**（Android TV seek / quality-filter compatibility）
+- ✅ **OrionTV 1.3.11**
 - ✅ **OrionTV 1.3.7**
 - ✅ **OrionTV 1.2.x 及以上所有版本**
 
@@ -64,6 +65,7 @@ DecoTV 为 OrionTV 提供完整的 LunaTV 兼容 API：
 | ----------------------- | -------------- | -------- |
 | `/api/login`            | 用户登录       | ❌       |
 | `/api/server-config`    | 获取服务器配置 | ✅       |
+| `/api/categories`       | 获取后端分类树 | ✅       |
 | `/api/search/resources` | 获取视频源列表 | ✅       |
 | `/api/search/one`       | 在指定源搜索   | ✅       |
 | `/api/detail`           | 获取视频详情   | ✅       |
@@ -85,6 +87,30 @@ GET https://your-domain.com/api/search/resources
 
 ```http
 GET https://your-domain.com/api/search/one?q=斗罗大陆&resourceId=dyttzy
+```
+
+### 清晰度过滤
+
+如果电视上搜索结果低清源过多，可以把 OrionTV 的 API 地址配置为路径前缀：
+
+```text
+https://your-domain.com/quality/720
+https://your-domain.com/quality/1080
+```
+
+DecoTV 会将后续 API 自动重写为 `minResolution=720` 或 `minResolution=1080`。默认只过滤已识别且低于门槛的结果，未知清晰度会保留，避免误伤没有标注清晰度但实际可播放的源。
+
+也可以与成人模式组合：
+
+```text
+https://your-domain.com/adult/quality/1080
+```
+
+显式接口参数同样支持：
+
+```http
+GET https://your-domain.com/api/search?q=斗罗大陆&minResolution=720
+GET https://your-domain.com/api/search?q=斗罗大陆&minResolution=720&resolutionStrict=1
 ```
 
 ## 🐛 常见问题
@@ -137,6 +163,10 @@ GET https://your-domain.com/api/search/one?q=斗罗大陆&resourceId=dyttzy
 1. 尝试切换其他视频源
 2. 检查网络连接
 3. 更新 OrionTV 到最新版本
+
+### Q6: Android TV 上无法正常拖动时间线
+
+DecoTV 对 OrionTV / React Native / okhttp 这类原生 TV 客户端默认返回上游直连 m3u8，避免服务端广告过滤代理改写 HLS 时间轴影响 seek。若你明确需要服务端 m3u8 过滤，可在排查时给接口追加 `adfilter=server`；遇到拖动异常时优先保持默认直连。
 
 ### Q5: 播放记录能同步吗？
 

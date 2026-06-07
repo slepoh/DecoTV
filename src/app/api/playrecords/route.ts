@@ -9,6 +9,14 @@ import { PlayRecord } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
+function corsHeaders(): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Cookie',
+  };
+}
+
 function isLegacyPrivateLibraryPlayRecordKey(key: string): boolean {
   if (key.startsWith('private:progress:')) {
     return true;
@@ -80,7 +88,10 @@ export async function GET(request: NextRequest) {
       Object.entries(records).filter(([key]) => isPublicPlayRecordKey(key)),
     );
 
-    return NextResponse.json(publicRecords, { status: 200 });
+    return NextResponse.json(publicRecords, {
+      status: 200,
+      headers: corsHeaders(),
+    });
   } catch (error) {
     console.error('Failed to load play records', error);
     return NextResponse.json(
@@ -130,7 +141,10 @@ export async function POST(request: NextRequest) {
       save_time: record.save_time ?? Date.now(),
     });
 
-    return NextResponse.json({ success: true }, { status: 200 });
+    return NextResponse.json(
+      { success: true },
+      { status: 200, headers: corsHeaders() },
+    );
   } catch (error) {
     console.error('Failed to save play record', error);
     return NextResponse.json(
@@ -179,7 +193,10 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({ success: true }, { status: 200 });
+    return NextResponse.json(
+      { success: true },
+      { status: 200, headers: corsHeaders() },
+    );
   } catch (error) {
     console.error('Failed to delete play record', error);
     return NextResponse.json(
@@ -187,4 +204,14 @@ export async function DELETE(request: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      ...corsHeaders(),
+      'Access-Control-Max-Age': '86400',
+    },
+  });
 }

@@ -102,6 +102,10 @@ export interface SearchResult {
   year: string;
   desc?: string;
   type_name?: string;
+  remarks?: string;
+  resolution?: string;
+  resolution_level?: number;
+  quality_tag?: string;
   douban_id?: number;
   tmdb_id?: number;
   connector_id?: string;

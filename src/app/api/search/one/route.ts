@@ -5,6 +5,11 @@ import { getAuthInfoFromCookie, verifyApiAuth } from '@/lib/auth';
 import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { rewriteEpisodesForAdFilterMany } from '@/lib/episode-rewriter';
+import {
+  buildResolutionFilterFromSearchParams,
+  filterSearchResultsByResolution,
+  formatResolutionLabel,
+} from '@/lib/video-quality';
 import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
@@ -25,6 +30,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
   const resourceId = searchParams.get('resourceId');
+  const resolutionFilter = buildResolutionFilterFromSearchParams(searchParams);
 
   if (!query || !resourceId) {
     const cacheTime = await getCacheTime();
@@ -86,6 +92,7 @@ export async function GET(request: NextRequest) {
         return !yellowWords.some((word: string) => typeName.includes(word));
       });
     }
+    result = filterSearchResultsByResolution(result, resolutionFilter);
     const cacheTime = await getCacheTime();
 
     if (result.length === 0) {
@@ -101,6 +108,10 @@ export async function GET(request: NextRequest) {
             'Access-Control-Allow-Methods': 'GET, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type, Cookie',
             'X-Adult-Filter': shouldFilterAdult ? 'enabled' : 'disabled',
+            'X-Min-Resolution': resolutionFilter.minLevel
+              ? formatResolutionLabel(resolutionFilter.minLevel)
+              : 'off',
+            'X-Resolution-Strict': resolutionFilter.strict ? 'true' : 'false',
           },
         },
       );
@@ -118,6 +129,10 @@ export async function GET(request: NextRequest) {
             'Access-Control-Allow-Methods': 'GET, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type, Cookie',
             'X-Adult-Filter': shouldFilterAdult ? 'enabled' : 'disabled',
+            'X-Min-Resolution': resolutionFilter.minLevel
+              ? formatResolutionLabel(resolutionFilter.minLevel)
+              : 'off',
+            'X-Resolution-Strict': resolutionFilter.strict ? 'true' : 'false',
           },
         },
       );

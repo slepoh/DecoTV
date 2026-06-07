@@ -8,7 +8,12 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-export type SearchFilterKey = 'source' | 'title' | 'year' | 'yearOrder';
+export type SearchFilterKey =
+  | 'source'
+  | 'title'
+  | 'year'
+  | 'resolution'
+  | 'yearOrder';
 
 export interface SearchFilterOption {
   label: string;
@@ -31,6 +36,7 @@ const DEFAULTS: Record<SearchFilterKey, string> = {
   source: 'all',
   title: 'all',
   year: 'all',
+  resolution: 'all',
   yearOrder: 'none',
 };
 

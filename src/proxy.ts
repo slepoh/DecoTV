@@ -7,25 +7,55 @@ import { isPublicAdminAllowed, isPublicMode } from '@/lib/auth-mode';
 
 export async function proxy(request: NextRequest) {
   let pathname = request.nextUrl.pathname;
+  let contentMode: string | null = null;
 
-  // 处理成人内容模式路径重写
-  // 如果路径以 /adult/ 开头，重写到实际 API 路径并添加 adult 标记
-  if (pathname.startsWith('/adult/')) {
-    const actualPath = pathname.replace('/adult/', '/');
-    const url = request.nextUrl.clone();
-    url.pathname = actualPath;
+  const rewriteUrl = request.nextUrl.clone();
+  let shouldRewrite = false;
 
-    // 添加成人内容标记到查询参数
-    url.searchParams.set('adult', '1');
+  while (true) {
+    const qualityMatch = pathname.match(/^\/quality\/([^/]+)(\/.*)$/i);
+    const shortQualityMatch = pathname.match(
+      /^\/q(360|480|720|1080|1440|2160)(\/.*)$/i,
+    );
 
-    // 重写请求
-    const response = NextResponse.rewrite(url);
-    response.headers.set('X-Content-Mode', 'adult');
+    if (pathname.startsWith('/adult/')) {
+      pathname = pathname.replace('/adult/', '/');
+      rewriteUrl.searchParams.set('adult', '1');
+      contentMode = 'adult';
+      shouldRewrite = true;
+      continue;
+    }
+
+    if (qualityMatch) {
+      pathname = qualityMatch[2] || '/';
+      rewriteUrl.searchParams.set('minResolution', qualityMatch[1]);
+      shouldRewrite = true;
+      continue;
+    }
+
+    if (shortQualityMatch) {
+      pathname = shortQualityMatch[2] || '/';
+      rewriteUrl.searchParams.set('minResolution', shortQualityMatch[1]);
+      shouldRewrite = true;
+      continue;
+    }
+
+    break;
+  }
+
+  // 处理成人内容和质量过滤路径重写。
+  // 例如 /adult/quality/720/api/search -> /api/search?adult=1&minResolution=720
+  if (shouldRewrite) {
+    rewriteUrl.pathname = pathname;
+    const response = NextResponse.rewrite(rewriteUrl);
+    if (contentMode) {
+      response.headers.set('X-Content-Mode', contentMode);
+    }
 
     // 如果是 API 请求，继续处理认证
-    if (actualPath.startsWith('/api')) {
+    if (pathname.startsWith('/api')) {
       // 不返回，继续执行下面的认证逻辑
-      request = new NextRequest(url, request);
+      request = new NextRequest(rewriteUrl, request);
       pathname = request.nextUrl.pathname;
     } else {
       return response;
@@ -119,6 +149,7 @@ function isPublicModeAllowedPath(pathname: string): boolean {
 
   const publicApis = [
     '/api/search',
+    '/api/categories',
     '/api/detail',
     '/api/playrecords',
     '/api/favorites',

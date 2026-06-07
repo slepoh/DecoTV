@@ -16,6 +16,41 @@ const STORAGE_TYPE =
     | 'kvrocks'
     | undefined) || 'localstorage';
 
+function isSecureRequest(req: NextRequest): boolean {
+  const forwardedProto = req.headers.get('x-forwarded-proto');
+  return (
+    forwardedProto === 'https' ||
+    req.nextUrl.protocol === 'https:' ||
+    process.env.NODE_ENV === 'production'
+  );
+}
+
+function getAuthCookieOptions(req: NextRequest, expires: Date) {
+  const secure = isSecureRequest(req);
+  return {
+    path: '/',
+    expires,
+    sameSite: secure ? ('none' as const) : ('lax' as const),
+    httpOnly: false,
+    secure,
+  };
+}
+
+function withCors(response: NextResponse, req: NextRequest): NextResponse {
+  const origin = req.headers.get('origin');
+  response.headers.set('Access-Control-Allow-Origin', origin || '*');
+  response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Cookie');
+  response.headers.set('Access-Control-Allow-Credentials', 'true');
+  return response;
+}
+
+function getAuthCookieExpires(): Date {
+  const expires = new Date();
+  expires.setDate(expires.getDate() + 30);
+  return expires;
+}
+
 // 生成签名
 async function generateSignature(
   data: string,
@@ -71,7 +106,7 @@ async function generateAuthCookie(
 export async function POST(req: NextRequest) {
   try {
     if (isPublicMode()) {
-      return NextResponse.json({ ok: true, mode: 'public' });
+      return withCors(NextResponse.json({ ok: true, mode: 'public' }), req);
     }
 
     // 本地 / localStorage 模式——仅校验固定密码
@@ -84,14 +119,10 @@ export async function POST(req: NextRequest) {
 
         // 清除可能存在的认证cookie
         response.cookies.set('auth', '', {
-          path: '/',
-          expires: new Date(0),
-          sameSite: 'lax', // 改为 lax 以支持 PWA
-          httpOnly: false, // PWA 需要客户端可访问
-          secure: false, // 根据协议自动设置
+          ...getAuthCookieOptions(req, new Date(0)),
         });
 
-        return response;
+        return withCors(response, req);
       }
 
       const { password } = await req.json();
@@ -114,18 +145,13 @@ export async function POST(req: NextRequest) {
         'owner',
         true,
       ); // localstorage 模式包含 password
-      const expires = new Date();
-      expires.setDate(expires.getDate() + 7); // 7天过期
+      const expires = getAuthCookieExpires();
 
       response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax', // 改为 lax 以支持 PWA
-        httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
+        ...getAuthCookieOptions(req, expires),
       });
 
-      return response;
+      return withCors(response, req);
     }
 
     // 数据库 / redis 模式——校验用户名并尝试连接数据库
@@ -151,18 +177,13 @@ export async function POST(req: NextRequest) {
         'owner',
         false,
       ); // 数据库模式不包含 password
-      const expires = new Date();
-      expires.setDate(expires.getDate() + 7); // 7天过期
+      const expires = getAuthCookieExpires();
 
       response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax', // 改为 lax 以支持 PWA
-        httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
+        ...getAuthCookieOptions(req, expires),
       });
 
-      return response;
+      return withCors(response, req);
     } else if (username === process.env.USERNAME) {
       return NextResponse.json({ error: '用户名或密码错误' }, { status: 401 });
     }
@@ -191,18 +212,13 @@ export async function POST(req: NextRequest) {
         user?.role || 'user',
         false,
       ); // 数据库模式不包含 password
-      const expires = new Date();
-      expires.setDate(expires.getDate() + 7); // 7天过期
+      const expires = getAuthCookieExpires();
 
       response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax', // 改为 lax 以支持 PWA
-        httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
+        ...getAuthCookieOptions(req, expires),
       });
 
-      return response;
+      return withCors(response, req);
     } catch (err) {
       console.error('数据库验证失败', err);
       return NextResponse.json({ error: '数据库错误' }, { status: 500 });
@@ -211,4 +227,8 @@ export async function POST(req: NextRequest) {
     console.error('登录接口异常', error);
     return NextResponse.json({ error: '服务器错误' }, { status: 500 });
   }
+}
+
+export async function OPTIONS(req: NextRequest) {
+  return withCors(new NextResponse(null, { status: 204 }), req);
 }

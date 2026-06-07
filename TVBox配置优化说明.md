@@ -29,6 +29,23 @@ https://你的域名/api/tvbox/config?mode=fast&format=json
 https://你的域名/api/tvbox/config?mode=safe&format=json
 ```
 
+#### 清晰度过滤
+
+如果电视端搜索结果中低清资源过多，可以在订阅地址加入 `minResolution`：
+
+```text
+https://你的域名/api/tvbox/config?minResolution=720&format=json
+https://你的域名/api/tvbox/config?minResolution=1080&format=json
+```
+
+该参数会透传到 DecoTV 智能搜索代理。默认策略只过滤“已识别且低于门槛”的结果，未知清晰度会保留；如果需要严格过滤未知清晰度，追加：
+
+```text
+https://你的域名/api/tvbox/config?minResolution=720&resolutionStrict=1&format=json
+```
+
+支持值：`360`、`480`、`720`、`1080`、`1440`、`2160`、`hd`、`fhd`、`2k`、`4k`。
+
 #### 3. **专用 Jar 服务**
 
 新增独立的 jar 服务端点，提升加载成功率：

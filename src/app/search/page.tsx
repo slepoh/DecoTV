@@ -20,6 +20,7 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { SearchResult } from '@/lib/types';
+import { normalizeResolutionLevel } from '@/lib/video-quality';
 
 import ErrorBoundary from '@/components/ErrorBoundary';
 import PageLayout from '@/components/PageLayout';
@@ -287,22 +288,26 @@ function SearchPageClient() {
     source: string;
     title: string;
     year: string;
+    resolution: string;
     yearOrder: 'none' | 'asc' | 'desc';
   }>({
     source: 'all',
     title: 'all',
     year: 'all',
+    resolution: 'all',
     yearOrder: 'none',
   });
   const [filterAgg, setFilterAgg] = useState<{
     source: string;
     title: string;
     year: string;
+    resolution: string;
     yearOrder: 'none' | 'asc' | 'desc';
   }>({
     source: 'all',
     title: 'all',
     year: 'all',
+    resolution: 'all',
     yearOrder: 'none',
   });
 
@@ -364,6 +369,24 @@ function SearchPageClient() {
     const bNum = parseInt(bYear, 10);
 
     return order === 'asc' ? aNum - bNum : bNum - aNum;
+  };
+
+  const getResolutionLevel = (item: SearchResult) => {
+    return (
+      normalizeResolutionLevel(item.resolution_level) ||
+      normalizeResolutionLevel(item.resolution)
+    );
+  };
+
+  const matchesResolutionFilter = (item: SearchResult, resolution: string) => {
+    if (resolution === 'all') return true;
+
+    const level = getResolutionLevel(item);
+    if (resolution === 'unknown') return level === 0;
+
+    const minLevel = normalizeResolutionLevel(resolution);
+    if (!minLevel) return true;
+    return level >= minLevel;
   };
 
   // 聚合后的结果（按标题和年份分组）
@@ -494,6 +517,9 @@ function SearchPageClient() {
     const sourcesSet = new Map<string, string>();
     const titlesSet = new Set<string>();
     const yearsSet = new Set<string>();
+    const hasUnknownResolution = searchResults.some(
+      (item) => getResolutionLevel(item) === 0,
+    );
 
     searchResults.forEach((item) => {
       if (item.source && item.source_name) {
@@ -529,16 +555,26 @@ function SearchPageClient() {
       ...(hasUnknown ? [{ label: '未知', value: 'unknown' }] : []),
     ];
 
+    const resolutionOptions: { label: string; value: string }[] = [
+      { label: '全部清晰度', value: 'all' },
+      { label: '4K+', value: '2160' },
+      { label: '1080p+', value: '1080' },
+      { label: '720p+', value: '720' },
+      ...(hasUnknownResolution ? [{ label: '未知', value: 'unknown' }] : []),
+    ];
+
     const categoriesAll: SearchFilterCategory[] = [
       { key: 'source', label: '来源', options: sourceOptions },
       { key: 'title', label: '标题', options: titleOptions },
       { key: 'year', label: '年份', options: yearOptions },
+      { key: 'resolution', label: '清晰度', options: resolutionOptions },
     ];
 
     const categoriesAgg: SearchFilterCategory[] = [
       { key: 'source', label: '来源', options: sourceOptions },
       { key: 'title', label: '标题', options: titleOptions },
       { key: 'year', label: '年份', options: yearOptions },
+      { key: 'resolution', label: '清晰度', options: resolutionOptions },
     ];
 
     return { categoriesAll, categoriesAgg };
@@ -548,12 +584,13 @@ function SearchPageClient() {
   const filteredAllResults = useMemo(() => {
     try {
       const safeResults = Array.isArray(searchResults) ? searchResults : [];
-      const { source, title, year, yearOrder } = filterAll;
+      const { source, title, year, resolution, yearOrder } = filterAll;
       const filtered = safeResults.filter((item) => {
         if (!item) return false;
         if (source !== 'all' && item.source !== source) return false;
         if (title !== 'all' && item.title !== title) return false;
         if (year !== 'all' && item.year !== year) return false;
+        if (!matchesResolutionFilter(item, resolution)) return false;
         return true;
       });
 
@@ -591,7 +628,7 @@ function SearchPageClient() {
       const safeAggResults = Array.isArray(aggregatedResults)
         ? aggregatedResults
         : [];
-      const { source, title, year, yearOrder } = filterAgg as any;
+      const { source, title, year, resolution, yearOrder } = filterAgg as any;
       const filtered = safeAggResults.filter(([_, group]) => {
         if (!Array.isArray(group) || group.length === 0) return false;
         const gTitle = group[0]?.title ?? '';
@@ -603,6 +640,12 @@ function SearchPageClient() {
         if (!hasSource) return false;
         if (title !== 'all' && gTitle !== title) return false;
         if (year !== 'all' && gYear !== year) return false;
+        if (
+          resolution !== 'all' &&
+          !group.some((item) => matchesResolutionFilter(item, resolution))
+        ) {
+          return false;
+        }
         return true;
       });
 

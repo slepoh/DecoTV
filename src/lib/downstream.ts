@@ -4,6 +4,7 @@ import { API_CONFIG, ApiSite, getConfig } from '@/lib/config';
 import { getCachedSearchPage, setCachedSearchPage } from '@/lib/search-cache';
 import { SearchResult } from '@/lib/types';
 import { cleanHtmlTags } from '@/lib/utils';
+import { decorateSearchResultQuality } from '@/lib/video-quality';
 
 interface ApiSearchItem {
   vod_id: string;
@@ -117,7 +118,7 @@ async function searchWithCache(
         });
       }
 
-      return {
+      const result: SearchResult = {
         id: item.vod_id.toString(),
         title: item.vod_name.trim().replace(/\s+/g, ' '),
         poster: item.vod_pic,
@@ -129,11 +130,21 @@ async function searchWithCache(
         year: item.vod_year
           ? item.vod_year.match(/\d{4}/)?.[0] || ''
           : 'unknown',
+        remarks: item.vod_remarks || '',
+        quality_tag: item.vod_remarks || item.type_name || item.vod_class || '',
         desc: cleanHtmlTags(item.vod_content || ''),
         type_name: item.type_name,
         douban_id: item.vod_douban_id,
         tmdb_id: normalizeNumericId(item.vod_tmdb_id),
       };
+
+      return decorateSearchResultQuality(
+        result,
+        item.vod_remarks,
+        item.vod_class,
+        item.vod_content,
+        item.vod_play_url,
+      );
     });
 
     // 过滤掉无效条目和集数为 0 的结果
@@ -305,7 +316,7 @@ export async function getDetailFromApi(
     episodes = matches.map((link: string) => link.replace(/^\$/, ''));
   }
 
-  return {
+  const result: SearchResult = {
     id: id.toString(),
     title: videoDetail.vod_name,
     poster: videoDetail.vod_pic,
@@ -317,11 +328,25 @@ export async function getDetailFromApi(
     year: videoDetail.vod_year
       ? videoDetail.vod_year.match(/\d{4}/)?.[0] || ''
       : 'unknown',
+    remarks: videoDetail.vod_remarks || '',
+    quality_tag:
+      videoDetail.vod_remarks ||
+      videoDetail.type_name ||
+      videoDetail.vod_class ||
+      '',
     desc: cleanHtmlTags(videoDetail.vod_content),
     type_name: videoDetail.type_name,
     douban_id: videoDetail.vod_douban_id,
     tmdb_id: normalizeNumericId(videoDetail.vod_tmdb_id),
   };
+
+  return decorateSearchResultQuality(
+    result,
+    videoDetail.vod_remarks,
+    videoDetail.vod_class,
+    videoDetail.vod_content,
+    videoDetail.vod_play_url,
+  );
 }
 
 async function handleSpecialSourceDetail(
@@ -388,7 +413,7 @@ async function handleSpecialSourceDetail(
   const yearMatch = html.match(/>(\d{4})</);
   const yearText = yearMatch ? yearMatch[1] : 'unknown';
 
-  return {
+  const result: SearchResult = {
     id,
     title: titleText,
     poster: coverUrl,
@@ -402,4 +427,6 @@ async function handleSpecialSourceDetail(
     type_name: '',
     douban_id: 0,
   };
+
+  return decorateSearchResultQuality(result, html);
 }

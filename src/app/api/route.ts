@@ -5,6 +5,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { CURRENT_VERSION } from '@/lib/version';
+import {
+  buildResolutionFilterFromSearchParams,
+  formatResolutionLabel,
+} from '@/lib/video-quality';
 
 export const runtime = 'nodejs';
 
@@ -21,6 +25,7 @@ export async function GET(request: NextRequest) {
   const adultParam = searchParams.get('adult');
   const filterParam = searchParams.get('filter');
   const contentMode = request.headers.get('X-Content-Mode');
+  const resolutionFilter = buildResolutionFilterFromSearchParams(searchParams);
 
   let adultFilterEnabled = !config.SiteConfig.DisableYellowFilter;
 
@@ -45,6 +50,10 @@ export async function GET(request: NextRequest) {
       authenticated: !!authInfo,
       adultFilterEnabled,
       contentMode: adultFilterEnabled ? 'family' : 'adult',
+      minResolution: resolutionFilter.minLevel
+        ? formatResolutionLabel(resolutionFilter.minLevel)
+        : '',
+      resolutionFilterStrict: resolutionFilter.strict,
       storageType: process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage',
       message: authInfo ? '服务器运行正常' : '服务器运行正常，请先登录',
     },

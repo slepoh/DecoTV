@@ -32,12 +32,32 @@ function getQueryProxyMode(request: NextRequest): boolean | null {
   return null;
 }
 
+function isNativeTvClient(request: NextRequest): boolean {
+  const headers = request.headers as Headers | undefined;
+  const searchParams = request.nextUrl?.searchParams;
+  const ua = (headers?.get('user-agent') || '').toLowerCase();
+  const client = (searchParams?.get('client') || '').toLowerCase();
+
+  return (
+    client === 'orion' ||
+    client === 'oriontv' ||
+    ua.includes('orion') ||
+    ua.includes('reactnative') ||
+    ua.includes('expo') ||
+    ua.includes('okhttp')
+  );
+}
+
 export function shouldUseServerSideEpisodeProxy(
   adminConfig: AdminConfig | null,
   request: NextRequest,
 ): boolean {
   const queryMode = getQueryProxyMode(request);
   if (queryMode !== null) return queryMode;
+
+  // Native TV players are more sensitive to rewritten HLS playlists. Keep their
+  // default playback URL direct so seeking uses the upstream timeline.
+  if (isNativeTvClient(request)) return false;
 
   const explicitProxyFlag =
     parseBooleanFlag(process.env.M3U8_SERVER_PROXY) ??

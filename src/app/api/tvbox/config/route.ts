@@ -4,6 +4,11 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
 import { getSpiderJar } from '@/lib/spiderJar';
+import {
+  buildResolutionFilterFromSearchParams,
+  formatResolutionLabel,
+  serializeResolutionFilter,
+} from '@/lib/video-quality';
 
 // ================= Spider 公共可达 & 回退缓存逻辑 =================
 // 目的：避免出现 “spider url is private/not public” & 404 问题
@@ -130,6 +135,10 @@ export async function GET(req: NextRequest) {
     // 🎯 智能搜索代理控制（默认启用）
     const proxyParam = searchParams.get('proxy'); // off 表示禁用代理，直连原始API
     const useSmartProxy = proxyParam !== 'off' && proxyParam !== 'disable'; // 默认启用
+    const resolutionFilter =
+      buildResolutionFilterFromSearchParams(searchParams);
+    const serializedResolutionFilter =
+      serializeResolutionFilter(resolutionFilter);
 
     console.log(
       '[TVBox] request:',
@@ -142,6 +151,10 @@ export async function GET(req: NextRequest) {
       filterParam,
       'proxy:',
       useSmartProxy,
+      'minResolution:',
+      resolutionFilter.minLevel
+        ? formatResolutionLabel(resolutionFilter.minLevel)
+        : 'off',
     );
 
     const cfg = await getConfig();
@@ -297,11 +310,16 @@ export async function GET(req: NextRequest) {
         // 保存原始API供代理使用
         site.original_api = site.api;
 
+        const proxySearchParams = new URLSearchParams({
+          source: s.key,
+          filter: shouldFilterAdult ? 'on' : 'off',
+          ...serializedResolutionFilter,
+          wd: '',
+        });
+
         // 替换为智能搜索代理端点
         // TVBox会在URL后拼接搜索关键词，格式：api + wd={keyword}
-        site.api = `${baseUrl}/api/tvbox/search?source=${encodeURIComponent(
-          s.key,
-        )}&filter=${shouldFilterAdult ? 'on' : 'off'}&wd=`;
+        site.api = `${baseUrl}/api/tvbox/search?${proxySearchParams.toString()}`;
 
         console.log(`[TVBox] Enabled smart proxy for source: ${s.key}`);
       }
@@ -319,7 +337,7 @@ export async function GET(req: NextRequest) {
         };
 
         // 优化搜索参数配置
-        if (!s.api.includes('?')) {
+        if (!useSmartProxy && !s.api.includes('?')) {
           if (apiType === 1) {
             // JSON接口标准参数
             site.api = s.api + (s.api.endsWith('/') ? '' : '/') + '?ac=list';
@@ -774,6 +792,10 @@ export async function GET(req: NextRequest) {
     tvboxConfig.spider_real_size = jarInfo.size;
     tvboxConfig.spider_tried = jarInfo.tried;
     tvboxConfig.spider_success = jarInfo.success;
+    tvboxConfig.min_resolution = resolutionFilter.minLevel
+      ? formatResolutionLabel(resolutionFilter.minLevel)
+      : 'off';
+    tvboxConfig.resolution_strict = resolutionFilter.strict;
 
     // 提供备用字段：仅用于调试，不影响体检
     (tvboxConfig as any).spider_backup =
