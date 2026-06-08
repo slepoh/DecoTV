@@ -4,6 +4,15 @@ import { NextResponse } from 'next/server';
 import path from 'path';
 
 import { BUILD_TIMESTAMP, CURRENT_VERSION } from '@/lib/version';
+import {
+  BuildMetadata,
+  compareBuildMetadata,
+  compareSemanticVersions,
+  normalizeCommitSha,
+  normalizeVersion,
+  shortCommit,
+  timestampFromIso,
+} from '@/lib/version-metadata';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +27,28 @@ const REMOTE_VERSION_URLS = [
   `https://raw.githubusercontent.com/${UPDATE_REPO}/${UPDATE_REF}/VERSION.txt`,
 ];
 
+const REMOTE_VERSION_METADATA_URLS = [
+  `https://raw.githubusercontent.com/${UPDATE_REPO}/${UPDATE_REF}/public/version.json`,
+  `https://cdn.jsdelivr.net/gh/${UPDATE_REPO}@${UPDATE_REF}/public/version.json`,
+  `https://fastly.jsdelivr.net/gh/${UPDATE_REPO}@${UPDATE_REF}/public/version.json`,
+];
+
+const REMOTE_PACKAGE_URLS = [
+  `https://raw.githubusercontent.com/${UPDATE_REPO}/${UPDATE_REF}/package.json`,
+  `https://cdn.jsdelivr.net/gh/${UPDATE_REPO}@${UPDATE_REF}/package.json`,
+  `https://fastly.jsdelivr.net/gh/${UPDATE_REPO}@${UPDATE_REF}/package.json`,
+];
+
+const REMOTE_COMMIT_URL = `https://api.github.com/repos/${UPDATE_REPO}/commits/${encodeURIComponent(
+  UPDATE_REF,
+)}`;
 const FETCH_TIMEOUT = 5000;
+const REMOTE_CACHE_TTL = 5 * 60 * 1000;
+
+let remoteMetadataCache: {
+  value: BuildMetadata | null;
+  timestamp: number;
+} | null = null;
 
 /**
  * 带超时的 fetch（服务端版本）
@@ -26,6 +56,7 @@ const FETCH_TIMEOUT = 5000;
 async function fetchWithTimeout(
   url: string,
   timeout: number,
+  accept = 'text/plain',
 ): Promise<string | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -36,6 +67,7 @@ async function fetchWithTimeout(
       cache: 'no-store',
       headers: {
         'User-Agent': 'DecoTV-VersionCheck/1.0',
+        Accept: accept,
       },
     });
 
@@ -48,39 +80,93 @@ async function fetchWithTimeout(
   }
 }
 
+async function readJsonFile<T>(filePath: string): Promise<T | null> {
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    return JSON.parse(content) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isTimestamp(value?: string | null) {
+  return /^\d{14}$/.test(value || '');
+}
+
+function pickTimestamp(...values: Array<string | undefined>) {
+  return values.find((value) => isTimestamp(value)) || '';
+}
+
 /**
- * 获取本地版本时间戳
+ * 获取本地构建元数据
  */
-async function getLocalTimestamp(): Promise<string> {
-  // 方法1: 从文件系统读取
+async function getLocalMetadata(): Promise<BuildMetadata> {
+  const metadataPaths = [
+    path.join(process.cwd(), 'public', 'version.json'),
+    path.join(process.cwd(), 'version.json'),
+  ];
+
+  let fileMetadata: Partial<BuildMetadata> = {};
+  for (const filePath of metadataPaths) {
+    const metadata = await readJsonFile<Partial<BuildMetadata>>(filePath);
+    if (metadata) {
+      fileMetadata = metadata;
+      break;
+    }
+  }
+
   const possiblePaths = [
     path.join(process.cwd(), 'public', 'VERSION.txt'),
     path.join(process.cwd(), 'VERSION.txt'),
     path.join(process.cwd(), '.next', 'static', 'VERSION.txt'),
   ];
 
+  let fileTimestamp = '';
   for (const filePath of possiblePaths) {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
       const timestamp = content.trim();
-      if (/^\d{14}$/.test(timestamp)) {
-        return timestamp;
+      if (isTimestamp(timestamp)) {
+        fileTimestamp = timestamp;
+        break;
       }
     } catch {
       continue;
     }
   }
 
-  // 方法2: 使用构建时注入的环境变量（如果有）
-  if (
-    process.env.BUILD_TIMESTAMP &&
-    /^\d{14}$/.test(process.env.BUILD_TIMESTAMP)
-  ) {
-    return process.env.BUILD_TIMESTAMP;
-  }
+  const commitSha = normalizeCommitSha(
+    process.env.GIT_COMMIT_SHA ||
+      process.env.NEXT_PUBLIC_BUILD_COMMIT_SHA ||
+      fileMetadata.commitSha,
+  );
 
-  // 方法3: 使用硬编码的默认值（从 version.ts 导入）
-  return BUILD_TIMESTAMP;
+  const timestamp =
+    pickTimestamp(
+      process.env.BUILD_TIMESTAMP,
+      process.env.NEXT_PUBLIC_BUILD_TIMESTAMP,
+      fileMetadata.timestamp,
+      fileTimestamp,
+      BUILD_TIMESTAMP,
+    ) || BUILD_TIMESTAMP;
+
+  return {
+    version: CURRENT_VERSION,
+    timestamp,
+    buildTime: fileMetadata.buildTime,
+    commitSha,
+    shortCommit: shortCommit(commitSha),
+    commitDate:
+      process.env.GIT_COMMIT_DATE ||
+      process.env.NEXT_PUBLIC_BUILD_COMMIT_DATE ||
+      fileMetadata.commitDate,
+    ref:
+      process.env.GIT_REF_NAME ||
+      process.env.NEXT_PUBLIC_BUILD_REF ||
+      fileMetadata.ref,
+    repo: fileMetadata.repo || UPDATE_REPO,
+    source: fileMetadata.source,
+  };
 }
 
 /**
@@ -104,35 +190,192 @@ async function getRemoteTimestamp(): Promise<string | null> {
   return null;
 }
 
+async function getRemoteMetadataFile(): Promise<Partial<BuildMetadata> | null> {
+  const results = await Promise.allSettled(
+    REMOTE_VERSION_METADATA_URLS.map((url) =>
+      fetchWithTimeout(url, FETCH_TIMEOUT, 'application/json'),
+    ),
+  );
+
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value) {
+      try {
+        return JSON.parse(result.value) as Partial<BuildMetadata>;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function getRemoteSemanticVersion(): Promise<string | null> {
+  const results = await Promise.allSettled(
+    REMOTE_PACKAGE_URLS.map((url) =>
+      fetchWithTimeout(url, FETCH_TIMEOUT, 'application/json'),
+    ),
+  );
+
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value) {
+      try {
+        const packageJson = JSON.parse(result.value);
+        if (typeof packageJson.version === 'string') {
+          return normalizeVersion(packageJson.version);
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function getRemoteCommitMetadata(): Promise<Partial<BuildMetadata> | null> {
+  const payload = await fetchWithTimeout(
+    REMOTE_COMMIT_URL,
+    FETCH_TIMEOUT,
+    'application/vnd.github+json',
+  );
+
+  if (!payload) return null;
+
+  try {
+    const data = JSON.parse(payload);
+    const commitSha = normalizeCommitSha(data.sha);
+    const commitDate =
+      data.commit?.committer?.date || data.commit?.author?.date || '';
+
+    return {
+      commitSha,
+      shortCommit: shortCommit(commitSha),
+      commitDate,
+      timestamp: timestampFromIso(commitDate),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 获取远程 main/ref 最新构建元数据。
+ *
+ * 优先使用 GitHub commit API 判断同一语义版本内的新提交；
+ * VERSION.txt 只作为旧部署和网络异常时的兼容回退。
+ */
+async function getRemoteMetadata(): Promise<BuildMetadata | null> {
+  if (
+    remoteMetadataCache &&
+    Date.now() - remoteMetadataCache.timestamp < REMOTE_CACHE_TTL
+  ) {
+    return remoteMetadataCache.value;
+  }
+
+  const [metadataFile, semanticVersion, timestamp, commitMetadata] =
+    await Promise.all([
+      getRemoteMetadataFile(),
+      getRemoteSemanticVersion(),
+      getRemoteTimestamp(),
+      getRemoteCommitMetadata(),
+    ]);
+
+  const remoteTimestamp =
+    pickTimestamp(
+      commitMetadata?.timestamp,
+      metadataFile?.timestamp,
+      timestamp || undefined,
+    ) || '';
+
+  const commitSha = normalizeCommitSha(
+    commitMetadata?.commitSha || metadataFile?.commitSha,
+  );
+
+  const metadata: BuildMetadata | null =
+    semanticVersion || remoteTimestamp || commitSha
+      ? {
+          version: (() => {
+            const detectedVersion =
+              semanticVersion ||
+              normalizeVersion(metadataFile?.version) ||
+              CURRENT_VERSION;
+
+            return commitSha &&
+              compareSemanticVersions(CURRENT_VERSION, detectedVersion) > 0
+              ? CURRENT_VERSION
+              : detectedVersion;
+          })(),
+          timestamp: remoteTimestamp,
+          buildTime: metadataFile?.buildTime,
+          commitSha,
+          shortCommit: shortCommit(commitSha),
+          commitDate: commitMetadata?.commitDate || metadataFile?.commitDate,
+          ref: UPDATE_REF,
+          repo: UPDATE_REPO,
+          source: commitMetadata?.commitSha ? 'github-commit' : 'remote-file',
+        }
+      : null;
+
+  remoteMetadataCache = {
+    value: metadata,
+    timestamp: Date.now(),
+  };
+
+  return metadata;
+}
+
 /**
  * 版本检查 API
- * GET /api/version/check - 完整的版本检测，包含本地和远程版本比较
+ * GET /api/version/check - 完整版本检测，包含语义版本、构建时间和 Git commit 比较
  *
- * 此 API 在服务端执行版本检测，解决客户端 CORS 和网络问题
+ * 此 API 在服务端执行版本检测，解决客户端 CORS 和网络问题。
  */
 export async function GET() {
   try {
-    // 获取本地版本
-    const localTimestamp = await getLocalTimestamp();
-
-    // 获取远程版本
-    const remoteTimestamp = await getRemoteTimestamp();
-
-    // 比较版本
-    let hasUpdate = false;
-    if (remoteTimestamp) {
-      const localNum = BigInt(localTimestamp);
-      const remoteNum = BigInt(remoteTimestamp);
-      hasUpdate = remoteNum > localNum;
-    }
+    const local = await getLocalMetadata();
+    const remote = await getRemoteMetadata();
+    const comparison = remote
+      ? compareBuildMetadata(local, remote)
+      : { hasUpdate: false, reason: 'none' as const };
 
     return NextResponse.json({
       success: true,
-      version: CURRENT_VERSION,
-      localTimestamp,
-      remoteTimestamp,
-      hasUpdate,
-      displayVersion: `v${CURRENT_VERSION}`,
+      version: local.version,
+      localTimestamp: local.timestamp,
+      remoteTimestamp: remote?.timestamp,
+      localCommit: local.shortCommit,
+      remoteCommit: remote?.shortCommit,
+      hasUpdate: comparison.hasUpdate,
+      updateReason: comparison.reason,
+      displayVersion: `v${local.version}`,
+      current: {
+        version: local.version,
+        timestamp: local.timestamp,
+        commitSha: local.commitSha,
+        shortCommit: local.shortCommit,
+        commitDate: local.commitDate,
+        displayVersion: `v${local.version}`,
+        updateAvailable: comparison.hasUpdate,
+      },
+      remote: remote
+        ? {
+            version: remote.version,
+            timestamp: remote.timestamp,
+            commitSha: remote.commitSha,
+            shortCommit: remote.shortCommit,
+            commitDate: remote.commitDate,
+            displayVersion: `v${remote.version}`,
+            downloadUrl: `https://github.com/${UPDATE_REPO}`,
+            releaseNotes: [
+              comparison.reason === 'commit'
+                ? 'main 分支已有新的构建提交'
+                : '发现新版本可用',
+              `最新版本: v${remote.version}`,
+              remote.shortCommit ? `最新提交: ${remote.shortCommit}` : '',
+            ].filter(Boolean),
+          }
+        : undefined,
       serverTime: Date.now(),
     });
   } catch (error) {

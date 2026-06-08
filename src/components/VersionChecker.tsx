@@ -10,13 +10,18 @@ interface VersionCheckResponse {
   current: {
     version: string;
     timestamp: string;
+    shortCommit?: string;
+    commitDate?: string;
     displayVersion: string;
     updateAvailable: boolean;
   };
   hasUpdate: boolean;
+  updateReason?: 'semantic-version' | 'commit' | 'timestamp' | 'none';
   remote?: {
     version: string;
     timestamp: string;
+    shortCommit?: string;
+    commitDate?: string;
     releaseNotes?: string[];
     downloadUrl?: string;
   };
@@ -35,7 +40,7 @@ export default function VersionChecker() {
     setError(null);
 
     try {
-      const response = await fetch('/api/version/check');
+      const response = await fetch(`/api/version/check?_t=${Date.now()}`);
       const data: VersionCheckResponse = await response.json();
 
       if (data.success) {
@@ -170,7 +175,7 @@ export default function VersionChecker() {
               <div className='flex items-center space-x-2 mb-2'>
                 <Download className='w-5 h-5 text-orange-600 dark:text-orange-400' />
                 <h4 className='font-semibold text-orange-800 dark:text-orange-200'>
-                  发现新版本 v{remote.version}+{remote.timestamp}
+                  发现新版本 v{remote.version}
                 </h4>
               </div>
 
@@ -182,6 +187,7 @@ export default function VersionChecker() {
                   <span className='font-mono text-orange-600 dark:text-orange-400'>
                     v{current.version} (构建:{' '}
                     {formatVersionTimestamp(current.timestamp)})
+                    {current.shortCommit ? ` ${current.shortCommit}` : ''}
                   </span>
                 </div>
                 <div className='flex items-center justify-between text-sm'>
@@ -191,6 +197,7 @@ export default function VersionChecker() {
                   <span className='font-mono text-orange-600 dark:text-orange-400'>
                     v{remote.version} (构建:{' '}
                     {formatVersionTimestamp(remote.timestamp)})
+                    {remote.shortCommit ? ` ${remote.shortCommit}` : ''}
                   </span>
                 </div>
               </div>

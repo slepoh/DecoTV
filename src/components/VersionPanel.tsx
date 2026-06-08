@@ -95,9 +95,12 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
   const doVersionCheck = async () => {
     setIsCheckingVersion(true);
     try {
-      const result = await checkForUpdates();
+      const result = await checkForUpdates({ force: true });
       setVersionCheckResult(result);
       setIsHasUpdate(result.status === UpdateStatus.HAS_UPDATE);
+      if (result.remoteVersion) {
+        setLatestVersion(result.remoteVersion);
+      }
     } catch (error) {
       console.error('版本检测失败:', error);
     } finally {
@@ -159,7 +162,7 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
 
       // 匹配版本行: ## [X.Y.Z] - YYYY-MM-DD
       const versionMatch = trimmedLine.match(
-        /^## \[([\d.]+)\] - (\d{4}-\d{2}-\d{2})$/,
+        /^## \[([\d.]+)\] - (\d{4}-\d{2}-\d{2})(?:\s+.*)?$/,
       );
       if (versionMatch) {
         if (currentVersion) {
@@ -181,13 +184,19 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
       // 如果遇到下一个版本或到达文件末尾，停止处理当前版本
       if (inVersionContent && currentVersion) {
         // 匹配章节标题
-        if (trimmedLine === '### Added') {
+        if (/^###\s+(?:Added|✨\s*)?新功能|^###\s+Added/.test(trimmedLine)) {
           currentSection = 'added';
           continue;
-        } else if (trimmedLine === '### Changed') {
+        } else if (
+          /^###\s+(?:Changed|⚡\s*)?(?:性能与体验优化|功能改进)|^###\s+Changed|^###\s+🔧/.test(
+            trimmedLine,
+          )
+        ) {
           currentSection = 'changed';
           continue;
-        } else if (trimmedLine === '### Fixed') {
+        } else if (
+          /^###\s+(?:Fixed|🐛\s*)?问题修复|^###\s+Fixed/.test(trimmedLine)
+        ) {
           currentSection = 'fixed';
           continue;
         }
@@ -323,6 +332,16 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
     );
   };
 
+  const remoteVersionLabel =
+    versionCheckResult?.remoteVersion || latestVersion || CURRENT_VERSION;
+  const localCommitLabel = versionCheckResult?.localCommit || '';
+  const remoteCommitLabel = versionCheckResult?.remoteCommit || '';
+  const isSameVersionUpdate =
+    hasUpdate && remoteVersionLabel === CURRENT_VERSION && remoteCommitLabel;
+  const updateSummary = isSameVersionUpdate
+    ? `v${CURRENT_VERSION} ${localCommitLabel ? `(${localCommitLabel})` : ''} → ${remoteCommitLabel}`
+    : `v${CURRENT_VERSION} → v${remoteVersionLabel}`;
+
   // 版本面板内容
   const versionPanelContent = (
     <>
@@ -419,11 +438,16 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
                         发现新版本
                       </h4>
                       <p className='text-xs sm:text-sm text-yellow-700 dark:text-yellow-300 break-all'>
-                        v{CURRENT_VERSION} → v{latestVersion}
+                        {updateSummary}
                       </p>
                       {versionCheckResult?.formattedRemoteTime && (
                         <p className='text-xs text-yellow-600 dark:text-yellow-400 mt-1'>
-                          发布时间: {versionCheckResult.formattedRemoteTime}
+                          最新构建: {versionCheckResult.formattedRemoteTime}
+                        </p>
+                      )}
+                      {remoteCommitLabel && (
+                        <p className='text-xs text-yellow-600 dark:text-yellow-400 mt-1'>
+                          最新提交: {remoteCommitLabel}
                         </p>
                       )}
                     </div>
@@ -466,6 +490,11 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
                         {versionCheckResult?.formattedLocalTime && (
                           <p className='text-xs text-green-600 dark:text-green-400 mt-1'>
                             构建时间: {versionCheckResult.formattedLocalTime}
+                          </p>
+                        )}
+                        {localCommitLabel && remoteCommitLabel && (
+                          <p className='text-xs text-green-600 dark:text-green-400 mt-1'>
+                            当前提交: {localCommitLabel}
                           </p>
                         )}
                       </div>
@@ -546,7 +575,11 @@ export const VersionPanel: React.FC<VersionPanelProps> = ({
                         const localVersions = changelog.map(
                           (local) => local.version,
                         );
-                        return !localVersions.includes(entry.version);
+                        return (
+                          !localVersions.includes(entry.version) ||
+                          (entry.version === CURRENT_VERSION &&
+                            versionCheckResult?.updateReason === 'commit')
+                        );
                       })
                       .map((entry, index) => (
                         <div
