@@ -5,8 +5,8 @@ import { getConfig } from '@/lib/config';
 import { signM3U8ProxyRequest } from '@/lib/m3u8-proxy';
 import { SearchResult } from '@/lib/types';
 
-// Server-side HLS proxying is opt-in. Default playback should stay direct so a
-// reverse proxy does not turn normal playback into server transit traffic.
+// Browser playback defaults to the filter proxy so upstream ad segments can be
+// removed. Native TV clients stay direct unless explicitly opted in below.
 function parseBooleanFlag(value: string | undefined): boolean | null {
   if (value === undefined) return null;
   const normalized = value.trim().toLowerCase();
@@ -64,10 +64,13 @@ export function shouldUseServerSideEpisodeProxy(
     parseBooleanFlag(process.env.ENABLE_M3U8_SERVER_PROXY);
   if (explicitProxyFlag !== null) return explicitProxyFlag;
 
+  const legacyAdFilterFlag = parseBooleanFlag(process.env.ENABLE_AD_FILTER);
+  if (legacyAdFilterFlag !== null) return legacyAdFilterFlag;
+
   const adminFlag = adminConfig?.AdFilterConfig?.enabled;
   if (typeof adminFlag === 'boolean') return adminFlag;
 
-  return parseBooleanFlag(process.env.ENABLE_AD_FILTER) === true;
+  return true;
 }
 
 function buildFilterProxyUrl(

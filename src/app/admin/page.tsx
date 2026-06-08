@@ -9849,6 +9849,11 @@ function AdminPageClient() {
   const [tvboxMode, setTvboxMode] = useState<
     'standard' | 'safe' | 'yingshicang' | 'fast'
   >('fast');
+  const [tvboxRegion, setTvboxRegion] = useState<'domestic' | 'international'>(
+    'domestic',
+  );
+  const [tvboxJarMode, setTvboxJarMode] = useState<'proxy' | 'remote'>('proxy');
+  const [tvboxDoubanEnabled, setTvboxDoubanEnabled] = useState(true);
   const [diagnosisResult, setDiagnosisResult] = useState<any>(null);
   const [isDiagnosing, setIsDiagnosing] = useState(false);
 
@@ -10000,9 +10005,20 @@ function AdminPageClient() {
         baseUrl = '';
       }
     }
-    // 始终附带 format 参数，确保 JSON 时为 ?format=json
-    const modeParam = tvboxMode !== 'standard' ? `&mode=${tvboxMode}` : '';
-    return `${baseUrl}/api/tvbox/config?format=${tvboxFormat}${modeParam}`;
+    const params = new URLSearchParams({
+      format: tvboxFormat,
+      region: tvboxRegion,
+    });
+    if (tvboxMode !== 'standard') params.set('mode', tvboxMode);
+    if (tvboxJarMode === 'remote') params.set('jar', 'remote');
+    if (!tvboxDoubanEnabled) params.set('douban', 'off');
+    return `${baseUrl}/api/tvbox/config?${params.toString()}`;
+  };
+
+  const getTvboxConfigUrlWithParam = (key: string, value: string) => {
+    const url = getTvboxConfigUrl();
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
   };
 
   const handleTvboxCopy = async () => {
@@ -10594,6 +10610,99 @@ function AdminPageClient() {
                         </div>
                       </div>
                     </div>
+
+                    <div className='mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4'>
+                      <div className='space-y-2'>
+                        <label className='text-xs font-semibold text-gray-600 dark:text-gray-400'>
+                          JAR 读取方式
+                        </label>
+                        <div className='grid grid-cols-2 gap-2'>
+                          {[
+                            { value: 'proxy', label: '同源代理' },
+                            { value: 'remote', label: '远程直连' },
+                          ].map((item) => (
+                            <label
+                              key={item.value}
+                              className={`cursor-pointer rounded-lg border px-3 py-2 text-center text-xs font-medium transition-colors ${
+                                tvboxJarMode === item.value
+                                  ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300'
+                                  : 'border-gray-200 bg-white text-gray-600 hover:border-emerald-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400'
+                              }`}
+                            >
+                              <input
+                                type='radio'
+                                name='tvboxJarMode'
+                                value={item.value}
+                                checked={tvboxJarMode === item.value}
+                                onChange={(e) =>
+                                  setTvboxJarMode(
+                                    e.target.value as 'proxy' | 'remote',
+                                  )
+                                }
+                                className='sr-only'
+                              />
+                              {item.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className='space-y-2'>
+                        <label className='text-xs font-semibold text-gray-600 dark:text-gray-400'>
+                          客户端地区
+                        </label>
+                        <div className='grid grid-cols-2 gap-2'>
+                          {[
+                            { value: 'domestic', label: '国内优先' },
+                            { value: 'international', label: '国际优先' },
+                          ].map((item) => (
+                            <label
+                              key={item.value}
+                              className={`cursor-pointer rounded-lg border px-3 py-2 text-center text-xs font-medium transition-colors ${
+                                tvboxRegion === item.value
+                                  ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+                                  : 'border-gray-200 bg-white text-gray-600 hover:border-sky-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400'
+                              }`}
+                            >
+                              <input
+                                type='radio'
+                                name='tvboxRegion'
+                                value={item.value}
+                                checked={tvboxRegion === item.value}
+                                onChange={(e) =>
+                                  setTvboxRegion(
+                                    e.target.value as
+                                      | 'domestic'
+                                      | 'international',
+                                  )
+                                }
+                                className='sr-only'
+                              />
+                              {item.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className='space-y-2'>
+                        <label className='text-xs font-semibold text-gray-600 dark:text-gray-400'>
+                          豆瓣导航
+                        </label>
+                        <label className='flex h-9 cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'>
+                          <span>
+                            {tvboxDoubanEnabled ? '已开启' : '已关闭'}
+                          </span>
+                          <input
+                            type='checkbox'
+                            checked={tvboxDoubanEnabled}
+                            onChange={(e) =>
+                              setTvboxDoubanEnabled(e.target.checked)
+                            }
+                            className='h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500'
+                          />
+                        </label>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -10640,8 +10749,7 @@ function AdminPageClient() {
                     <div className='grid grid-cols-1 sm:grid-cols-2 gap-3'>
                       <button
                         onClick={() => {
-                          const baseUrl = getTvboxConfigUrl().split('?')[0];
-                          navigator.clipboard.writeText(baseUrl);
+                          navigator.clipboard.writeText(getTvboxConfigUrl());
                           showSuccess(
                             '已复制家庭安全模式链接（默认过滤成人内容）',
                             showAlert,
@@ -10669,9 +10777,9 @@ function AdminPageClient() {
 
                       <button
                         onClick={() => {
-                          const baseUrl = getTvboxConfigUrl().split('?')[0];
-                          const fullUrl = `${baseUrl}?filter=off`;
-                          navigator.clipboard.writeText(fullUrl);
+                          navigator.clipboard.writeText(
+                            getTvboxConfigUrlWithParam('filter', 'off'),
+                          );
                           showSuccess(
                             '已复制完整内容模式链接（显示所有内容）',
                             showAlert,

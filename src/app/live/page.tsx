@@ -46,6 +46,7 @@ declare global {
 interface LiveChannel {
   id: string;
   tvgId: string;
+  tvgName?: string;
   name: string;
   logo: string;
   group: string;
@@ -865,7 +866,8 @@ function LivePageClient() {
       // 转换频道数据格式
       const channels: LiveChannel[] = channelsData.map((channel: any) => ({
         id: channel.id,
-        tvgId: channel.tvgId || channel.name,
+        tvgId: channel.tvgId || channel.tvgName || channel.name,
+        tvgName: channel.tvgName,
         name: channel.name,
         logo: channel.logo,
         group: channel.group || '其他',

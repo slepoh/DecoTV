@@ -8,17 +8,29 @@ export function parseCustomTimeFormat(timeStr: string): Date {
     return new Date(timeStr);
   }
 
-  // 处理 "20250824000000 +0800" 格式
-  // 格式说明：YYYYMMDDHHMMSS +ZZZZ
+  // 处理 "20250824000000 +0800" / "20250824000000" 格式
+  // 格式说明：YYYYMMDDHHMMSS [+ZZZZ]
   const match = timeStr.match(
-    /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\s*([+-]\d{4})$/,
+    /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\s*([+-]\d{4}))?$/,
   );
 
   if (match) {
     const [, year, month, day, hour, minute, second, timezone] = match;
 
+    if (!timezone) {
+      return new Date(
+        Number(year),
+        Number(month) - 1,
+        Number(day),
+        Number(hour),
+        Number(minute),
+        Number(second),
+      );
+    }
+
     // 创建ISO格式的时间字符串
-    const isoString = `${year}-${month}-${day}T${hour}:${minute}:${second}${timezone}`;
+    const timezoneWithColon = `${timezone.slice(0, 3)}:${timezone.slice(3)}`;
+    const isoString = `${year}-${month}-${day}T${hour}:${minute}:${second}${timezoneWithColon}`;
     return new Date(isoString);
   }
 

@@ -53,6 +53,7 @@ export const DEFAULT_AD_FILTER_CONFIG: AdFilterConfig = {
     'iqiyiad.',
     'iqiyi.com/cupid',
     'cupid.iqiyi',
+    'iqiyi.hbuioo.com',
     'mgtvad.',
     'admaster.',
     'miaozhen.',
@@ -74,6 +75,22 @@ export const DEFAULT_AD_FILTER_CONFIG: AdFilterConfig = {
     'preroll',
     'midroll',
     'postroll',
+    'ffzyad',
+    'vip.ffzyad.com',
+    'bytegoofy.com',
+    'mimg.0c1q0l.cn',
+    'mc.usihnbcq.cn',
+    'wan.51img1.com',
+    'casino',
+    'macau',
+    'aomen',
+    'gambling',
+    'bet365',
+    '1xbet',
+    '188bet',
+    '22bet',
+    'bookmaker',
+    'sportsbook',
   ],
   safeDomains: [
     'hhuus.com',
@@ -105,6 +122,26 @@ export const DEFAULT_AD_FILTER_CONFIG: AdFilterConfig = {
   ],
 };
 
+const FORCE_AD_DOMAIN_PATTERNS = [
+  'ffzyad',
+  'vip.ffzyad.com',
+  'bytegoofy.com',
+  'mimg.0c1q0l.cn',
+  'mc.usihnbcq.cn',
+  'wan.51img1.com',
+  'iqiyi.hbuioo.com',
+  'casino',
+  'macau',
+  'aomen',
+  'gambling',
+  'bet365',
+  '1xbet',
+  '188bet',
+  '22bet',
+  'bookmaker',
+  'sportsbook',
+];
+
 interface ParsedSegment {
   duration: number;
   discontinuityGroup: number;
@@ -132,6 +169,9 @@ export interface FilterResult {
 function isAdDomain(url: string, config: AdFilterConfig): boolean {
   if (!url) return false;
   const lowerUrl = url.toLowerCase();
+  for (const pattern of FORCE_AD_DOMAIN_PATTERNS) {
+    if (lowerUrl.includes(pattern)) return true;
+  }
   for (const safe of config.safeDomains) {
     if (lowerUrl.includes(safe)) return false;
   }

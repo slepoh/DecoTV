@@ -334,6 +334,9 @@ async function getInitConfig(
     PrivateLibraryConfig: {
       connectors: [],
     },
+    AdFilterConfig: {
+      enabled: true,
+    },
   };
 
   // 补充用户信息
@@ -465,6 +468,9 @@ export function getLocalModeConfig(): AdminConfig {
     },
     PrivateLibraryConfig: {
       connectors: [],
+    },
+    AdFilterConfig: {
+      enabled: true,
     },
   };
   return adminConfig;

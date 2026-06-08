@@ -8,6 +8,7 @@ export interface LiveChannels {
   channels: {
     id: string;
     tvgId: string;
+    tvgName?: string;
     name: string;
     logo: string;
     group: string;
@@ -99,7 +100,17 @@ async function parseEpg(
     return {};
   }
 
-  const tvgs = new Set(tvgIds);
+  const normalizeEpgKey = (value: string) =>
+    value.trim().toLowerCase().replace(/\s+/g, '');
+  const tvgKeyMap = new Map(
+    tvgIds
+      .filter((tvgId) => tvgId && tvgId.trim())
+      .map((tvgId) => [normalizeEpgKey(tvgId), tvgId]),
+  );
+  const getXmlAttr = (line: string, name: string) => {
+    const match = line.match(new RegExp(`${name}=["']([^"']*)["']`));
+    return match ? match[1] : '';
+  };
   const result: {
     [key: string]: { start: string; end: string; title: string }[];
   } = {};
@@ -123,9 +134,56 @@ async function parseEpg(
     const decoder = new TextDecoder();
     let buffer = '';
     let currentTvgId = '';
+    let currentResultKey = '';
     let currentProgram: { start: string; end: string; title: string } | null =
       null;
     let shouldSkipCurrentProgram = false;
+
+    const handleLine = (line: string) => {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) return;
+
+      // 解析 <programme> 标签
+      if (trimmedLine.startsWith('<programme')) {
+        currentTvgId = getXmlAttr(trimmedLine, 'channel');
+        currentResultKey = tvgKeyMap.get(normalizeEpgKey(currentTvgId)) || '';
+        const start = getXmlAttr(trimmedLine, 'start');
+        const end = getXmlAttr(trimmedLine, 'stop');
+
+        if (currentTvgId && start && end) {
+          currentProgram = { start, end, title: '' };
+          shouldSkipCurrentProgram = !currentResultKey;
+        }
+        return;
+      }
+
+      // 解析 <title> 标签 - 只有在需要解析当前节目时才处理
+      if (
+        trimmedLine.startsWith('<title') &&
+        currentProgram &&
+        !shouldSkipCurrentProgram
+      ) {
+        const titleMatch = trimmedLine.match(
+          /<title(?:\s+[^>]*)?>(.*?)<\/title>/,
+        );
+        if (titleMatch && currentProgram && currentResultKey) {
+          currentProgram.title = titleMatch[1];
+          if (!result[currentResultKey]) {
+            result[currentResultKey] = [];
+          }
+          result[currentResultKey].push({ ...currentProgram });
+          currentProgram = null;
+        }
+        return;
+      }
+
+      if (trimmedLine === '</programme>') {
+        currentProgram = null;
+        currentTvgId = '';
+        currentResultKey = '';
+        shouldSkipCurrentProgram = false;
+      }
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -139,58 +197,12 @@ async function parseEpg(
 
       // 处理完整的行
       for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (!trimmedLine) continue;
-
-        // 解析 <programme> 标签
-        if (trimmedLine.startsWith('<programme')) {
-          // 提取 tvg-id
-          const tvgIdMatch = trimmedLine.match(/channel="([^"]*)"/);
-          currentTvgId = tvgIdMatch ? tvgIdMatch[1] : '';
-
-          // 提取开始时间
-          const startMatch = trimmedLine.match(/start="([^"]*)"/);
-          const start = startMatch ? startMatch[1] : '';
-
-          // 提取结束时间
-          const endMatch = trimmedLine.match(/stop="([^"]*)"/);
-          const end = endMatch ? endMatch[1] : '';
-
-          if (currentTvgId && start && end) {
-            currentProgram = { start, end, title: '' };
-            // 优化：如果当前频道不在我们关注的列表中，标记为跳过
-            shouldSkipCurrentProgram = !tvgs.has(currentTvgId);
-          }
-        }
-        // 解析 <title> 标签 - 只有在需要解析当前节目时才处理
-        else if (
-          trimmedLine.startsWith('<title') &&
-          currentProgram &&
-          !shouldSkipCurrentProgram
-        ) {
-          // 处理带有语言属性的title标签，如 <title lang="zh">远方的家2025-60</title>
-          const titleMatch = trimmedLine.match(
-            /<title(?:\s+[^>]*)?>(.*?)<\/title>/,
-          );
-          if (titleMatch && currentProgram) {
-            currentProgram.title = titleMatch[1];
-
-            // 保存节目信息（这里不需要再检查tvgs.has，因为shouldSkipCurrentProgram已经确保了相关性）
-            if (!result[currentTvgId]) {
-              result[currentTvgId] = [];
-            }
-            result[currentTvgId].push({ ...currentProgram });
-
-            currentProgram = null;
-          }
-        }
-        // 处理 </programme> 标签
-        else if (trimmedLine === '</programme>') {
-          currentProgram = null;
-          currentTvgId = '';
-          shouldSkipCurrentProgram = false; // 重置跳过标志
-        }
+        handleLine(line);
       }
+    }
+
+    if (buffer.trim()) {
+      handleLine(buffer);
     }
   } catch {
     // ignore
@@ -212,6 +224,7 @@ function parseM3U(
   channels: {
     id: string;
     tvgId: string;
+    tvgName?: string;
     name: string;
     logo: string;
     group: string;
@@ -221,6 +234,7 @@ function parseM3U(
   const channels: {
     id: string;
     tvgId: string;
+    tvgName?: string;
     name: string;
     logo: string;
     group: string;
@@ -240,7 +254,9 @@ function parseM3U(
     // 检查是否是 #EXTM3U 行，提取 tvg-url
     if (line.startsWith('#EXTM3U')) {
       // 支持两种格式：x-tvg-url 和 url-tvg
-      const tvgUrlMatch = line.match(/(?:x-tvg-url|url-tvg)="([^"]*)"/);
+      const tvgUrlMatch = line.match(
+        /(?:x-tvg-url|url-tvg)\s*=\s*["']([^"']*)["']/i,
+      );
       tvgUrl = tvgUrlMatch ? tvgUrlMatch[1].split(',')[0].trim() : '';
       continue;
     }
@@ -268,7 +284,8 @@ function parseM3U(
       const title = titleMatch ? titleMatch[1].trim() : '';
 
       // 优先使用 tvg-name，如果没有则使用标题
-      const name = title || tvgName || '';
+      const name = title || tvgName || tvgId || '';
+      const resolvedTvgId = tvgId || tvgName || title;
 
       // 检查下一行是否是URL
       if (i + 1 < lines.length && !lines[i + 1].startsWith('#')) {
@@ -278,7 +295,8 @@ function parseM3U(
         if (name && url) {
           channels.push({
             id: `${sourceKey}-${channelIndex}`,
-            tvgId,
+            tvgId: resolvedTvgId,
+            tvgName,
             name,
             logo,
             group,

@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { rankSearchResults } from '@/lib/search-ranking';
+import { getLastNonEmptySearchParam } from '@/lib/tvbox-utils';
 import {
   buildResolutionFilterFromSearchParams,
   filterSearchResultsByResolution,
@@ -59,7 +60,13 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const sourceKey = searchParams.get('source');
-    const query = searchParams.get('wd');
+    const query = getLastNonEmptySearchParam(searchParams, [
+      'wd',
+      'q',
+      'key',
+      'keyword',
+      'searchword',
+    ]);
     const filterRaw = searchParams.get('filter');
     const filterParam = (filterRaw ?? 'on').toLowerCase();
     const strictMode = searchParams.get('strict') === '1';
